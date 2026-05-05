@@ -57,6 +57,8 @@ export default function AdminPage() {
   const [workingSaturdays, setWorkingSaturdays] = useState<WorkingSaturday[]>([])
   const [acting, setActing] = useState<string | null>(null)
   const [actionError, setActionError] = useState('')
+  const [rejectingId, setRejectingId] = useState<string | null>(null)
+  const [rejectReason, setRejectReason] = useState('')
 
   const [hForm, setHForm] = useState({ name: '', date: '', type: 'national' })
   const [hSaving, setHSaving] = useState(false)
@@ -160,7 +162,7 @@ export default function AdminPage() {
     })
   }, [])
 
-  async function handleLeaveAction(id: string, action: 'approve' | 'reject') {
+  async function handleLeaveAction(id: string, action: 'approve' | 'reject', rejectionReason?: string) {
     setActing(id + action)
     setActionError('')
     const newStatus = action === 'approve' ? 'approved' : 'rejected'
@@ -168,9 +170,12 @@ export default function AdminPage() {
     const leave = pendingLeaves.find(l => l.id === id)
     if (!leave) { setActing(null); return }
 
-    console.log('[Admin] handleLeaveAction:', { id, action, newStatus, leave })
+    console.log('[Admin] handleLeaveAction:', { id, action, newStatus, rejectionReason, leave })
 
-    const { error: updateErr } = await supabaseAdmin.from('leaves').update({ status: newStatus }).eq('id', id)
+    const updatePayload: Record<string, any> = { status: newStatus }
+    if (action === 'reject' && rejectionReason) updatePayload.rejection_reason = rejectionReason
+
+    const { error: updateErr } = await supabaseAdmin.from('leaves').update(updatePayload).eq('id', id)
     if (updateErr) {
       console.error('[Admin] handleLeaveAction update error:', updateErr)
       setActionError(`Failed to ${action}: ${updateErr.message}`)
@@ -424,21 +429,51 @@ export default function AdminPage() {
                     </p>
                     {leave.reason && <p className="text-xs text-[#bbb] mt-1 italic">{leave.reason}</p>}
                   </div>
-                  <div className="flex gap-3 shrink-0">
+                  <div className="flex items-center gap-3 shrink-0">
                     <button
                       onClick={() => handleLeaveAction(leave.id, 'approve')}
-                      disabled={acting !== null}
+                      disabled={acting !== null || rejectingId === leave.id}
                       className="px-5 py-2 border border-emerald-600 text-xs tracking-wider uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-40"
                     >
                       {acting === leave.id + 'approve' ? '…' : 'Approve'}
                     </button>
-                    <button
-                      onClick={() => handleLeaveAction(leave.id, 'reject')}
-                      disabled={acting !== null}
-                      className="px-5 py-2 border border-red-400 text-xs tracking-wider uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-40"
-                    >
-                      {acting === leave.id + 'reject' ? '…' : 'Reject'}
-                    </button>
+                    {rejectingId === leave.id ? (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="Reason (optional)"
+                          value={rejectReason}
+                          onChange={e => setRejectReason(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') { handleLeaveAction(leave.id, 'reject', rejectReason); setRejectingId(null); setRejectReason('') }
+                            if (e.key === 'Escape') { setRejectingId(null); setRejectReason('') }
+                          }}
+                          autoFocus
+                          className="border border-[#ddd] bg-[#F5F2EE] px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none w-44"
+                        />
+                        <button
+                          onClick={() => { handleLeaveAction(leave.id, 'reject', rejectReason); setRejectingId(null); setRejectReason('') }}
+                          disabled={acting !== null}
+                          className="px-4 py-2 border border-red-400 text-xs tracking-wider uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-40"
+                        >
+                          {acting === leave.id + 'reject' ? '…' : 'Confirm'}
+                        </button>
+                        <button
+                          onClick={() => { setRejectingId(null); setRejectReason('') }}
+                          className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer px-1"
+                        >
+                          ✕
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => { setRejectingId(leave.id); setRejectReason('') }}
+                        disabled={acting !== null}
+                        className="px-5 py-2 border border-red-400 text-xs tracking-wider uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-40"
+                      >
+                        Reject
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
