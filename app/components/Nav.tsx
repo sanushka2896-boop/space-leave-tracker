@@ -17,7 +17,7 @@ export default function Nav({ isAdmin = false }: { isAdmin?: boolean }) {
 
   return (
     <header className="border-b border-[#ddd] px-12 py-5 flex items-center justify-between bg-white sticky top-0 z-10">
-      <img src="/logo.svg" alt="The Space At 9/2" className="h-8 cursor-pointer" onClick={() => router.push('/dashboard')} />
+      <img src="/logo.svg" alt="The Space At 9/2" className="h-12 cursor-pointer" onClick={() => router.push('/dashboard')} />
       <nav className="flex items-center gap-10">
         {links.map(link => (
           <button

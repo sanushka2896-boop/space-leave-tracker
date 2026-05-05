@@ -8,6 +8,8 @@ type DayData = {
   myLeave?: { type: string; status: string }
   teamLeaves?: { name: string; type: string }[]
   holiday?: { name: string }
+  companyWorkingSaturday?: boolean
+  personalWorkingSaturdays?: { name: string }[]
 }
 
 function getDaysInMonth(year: number, month: number) {
@@ -45,7 +47,7 @@ const TYPE_LABELS: Record<string, string> = {
 
 export default function CalendarPage() {
   const [isAdmin, setIsAdmin] = useState(false)
-  const [calData, setCalData] = useState<{ myLeaves: any[]; teamLeaves: any[]; holidays: any[] } | null>(null)
+  const [calData, setCalData] = useState<{ myLeaves: any[]; teamLeaves: any[]; holidays: any[]; workingSaturdays: any[] } | null>(null)
   const [year, setYear] = useState(new Date().getFullYear())
   const [month, setMonth] = useState(new Date().getMonth())
   const router = useRouter()
@@ -64,7 +66,7 @@ export default function CalendarPage() {
 
       setIsAdmin(dbUser.is_admin ?? false)
 
-      const [{ data: myLeaves }, { data: teamLeaves }, { data: holidays }] = await Promise.all([
+      const [{ data: myLeaves }, { data: teamLeaves }, { data: holidays }, { data: workingSaturdays }] = await Promise.all([
         supabaseAdmin
           .from('leaves')
           .select('*')
@@ -79,12 +81,17 @@ export default function CalendarPage() {
           .from('holidays')
           .select('*')
           .order('date', { ascending: true }),
+        supabaseAdmin
+          .from('working_saturdays')
+          .select('id, date, user_id, users(name)')
+          .order('date', { ascending: true }),
       ])
 
       setCalData({
         myLeaves: myLeaves ?? [],
         teamLeaves: teamLeaves ?? [],
         holidays: holidays ?? [],
+        workingSaturdays: workingSaturdays ?? [],
       })
     })
   }, [])
@@ -117,6 +124,15 @@ export default function CalendarPage() {
     for (const h of calData.holidays) {
       const prev = dayMap.get(h.date) ?? {}
       dayMap.set(h.date, { ...prev, holiday: { name: h.name } })
+    }
+    for (const ws of calData.workingSaturdays) {
+      const prev = dayMap.get(ws.date) ?? {}
+      if (ws.user_id === null) {
+        dayMap.set(ws.date, { ...prev, companyWorkingSaturday: true })
+      } else {
+        const personal = prev.personalWorkingSaturdays ?? []
+        dayMap.set(ws.date, { ...prev, personalWorkingSaturdays: [...personal, { name: (ws.users as any)?.name || 'Team' }] })
+      }
     }
   }
 
@@ -200,6 +216,16 @@ export default function CalendarPage() {
                     {(data?.teamLeaves?.length ?? 0) > 2 && (
                       <div className="text-[9px] text-[#aaa]">+{(data!.teamLeaves!.length) - 2} more</div>
                     )}
+                    {data?.companyWorkingSaturday && (
+                      <div className="text-[9px] tracking-wider uppercase truncate leading-tight text-[#7a6e5f] bg-[#e8e0d5] px-1 rounded-sm">
+                        Working Sat
+                      </div>
+                    )}
+                    {data?.personalWorkingSaturdays?.map((ps, i) => (
+                      <div key={i} className="text-[9px] tracking-wider uppercase truncate leading-tight text-[#9a8e82] bg-[#f0ebe4] px-1 rounded-sm">
+                        {ps.name.split(' ')[0]} Sat
+                      </div>
+                    ))}
                   </div>
                 </div>
               )
@@ -207,16 +233,18 @@ export default function CalendarPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-8 mt-6">
+        <div className="flex items-center flex-wrap gap-x-8 gap-y-3 mt-6">
           {[
-            { color: 'bg-emerald-100 text-emerald-700', label: 'Your leave (approved)' },
-            { color: 'bg-amber-100 text-amber-600', label: 'Your leave (pending)' },
-            { color: 'bg-blue-50 text-blue-500', label: 'Team leave' },
-            { color: 'bg-amber-50 text-amber-600', label: 'Holiday' },
+            { bg: 'bg-emerald-100', text: 'text-emerald-700', label: 'Your leave (approved)' },
+            { bg: 'bg-amber-100', text: 'text-amber-600', label: 'Your leave (pending)' },
+            { bg: 'bg-blue-50', text: 'text-blue-500', label: 'Team leave' },
+            { bg: 'bg-amber-50', text: 'text-amber-600', label: 'Holiday' },
+            { bg: 'bg-[#e8e0d5]', text: 'text-[#7a6e5f]', label: 'Company working Saturday' },
+            { bg: 'bg-[#f0ebe4]', text: 'text-[#9a8e82]', label: 'Personal working Saturday' },
           ].map(item => (
             <div key={item.label} className="flex items-center gap-2">
-              <span className={`w-3 h-3 rounded-sm ${item.color.split(' ')[0]}`} />
-              <span className={`text-xs tracking-wider ${item.color.split(' ')[1]}`}>{item.label}</span>
+              <span className={`w-3 h-3 rounded-sm ${item.bg}`} />
+              <span className={`text-xs tracking-wider ${item.text}`}>{item.label}</span>
             </div>
           ))}
         </div>
