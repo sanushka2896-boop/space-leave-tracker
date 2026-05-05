@@ -11,31 +11,76 @@ const ROLES = [
   'Design Strategist Sr', 'Design Strategist Mid', 'Design Strategist Junior',
   'Creative Director', 'General Manager', 'Design & Processes Manager', 'Founder',
 ]
-
 const LOCATIONS = ['Mumbai', 'Kolkata', 'Bangalore', 'Other']
+
+type Tab = 'profile' | 'leaves' | 'logs'
+
+type Leave = {
+  id: string; type: string; date_from: string; date_to: string
+  value: number; reason: string | null; status: string; rejection_reason: string | null
+}
+type EditState = { type: string; date_from: string; date_to: string; value: string; reason: string }
+
+const STATUS_STYLES: Record<string, string> = {
+  pending: 'text-amber-600 bg-amber-50',
+  approved: 'text-emerald-600 bg-emerald-50',
+  rejected: 'text-red-500 bg-red-50',
+  cancelled: 'text-[#bbb] bg-[#f5f5f5]',
+}
+
+function fmt(d: string) {
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+function fmtShort(d: string) {
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
 
 export default function ProfilePage() {
   const [user, setUser] = useState<User | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [userId, setUserId] = useState('')
+  const [activeTab, setActiveTab] = useState<Tab>('profile')
+
+  // Profile tab
   const [form, setForm] = useState({ name: '', role: '', location: '', is_bd_associate: false })
-  const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
+
+  // Leaves tab
+  const [upcomingLeaves, setUpcomingLeaves] = useState<Leave[]>([])
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editState, setEditState] = useState<EditState>({ type: '', date_from: '', date_to: '', value: '1', reason: '' })
+  const [leaveSaving, setLeaveSaving] = useState(false)
+
+  // Logs tab
+  const [allLeaves, setAllLeaves] = useState<Leave[]>([])
+
   const router = useRouter()
+
+  async function loadLeaves(uid: string) {
+    const today = new Date().toISOString().split('T')[0]
+    const [{ data: upcoming }, { data: all }] = await Promise.all([
+      supabaseAdmin.from('leaves').select('id, type, date_from, date_to, value, reason, status, rejection_reason')
+        .eq('user_id', uid).in('status', ['approved', 'pending'])
+        .order('date_from', { ascending: true }),
+      supabaseAdmin.from('leaves').select('id, type, date_from, date_to, value, reason, status, rejection_reason')
+        .eq('user_id', uid).order('created_at', { ascending: false }),
+    ])
+    const filtered = (upcoming ?? []).filter((l: any) =>
+      l.status === 'pending' || (l.status === 'approved' && l.date_from >= today)
+    )
+    setUpcomingLeaves(filtered as Leave[])
+    setAllLeaves((all ?? []) as Leave[])
+  }
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) { router.push('/'); return }
       setUser(session.user)
 
-      console.log('[profile] fetching user for email:', session.user.email)
       const { data, error: dbErr } = await supabaseAdmin
-        .from('users')
-        .select('*')
-        .eq('email', session.user.email)
-        .single()
-      console.log('[profile] user data:', data, 'error:', dbErr)
+        .from('users').select('*').eq('email', session.user.email).single()
 
       if (data) {
         setUserId(data.id)
@@ -46,112 +91,269 @@ export default function ProfilePage() {
           location: data.location || '',
           is_bd_associate: data.is_bd_associate || false,
         })
-      } else {
-        // Fallback: use auth metadata for name
-        setForm(f => ({ ...f, name: session.user.user_metadata?.full_name || '' }))
+        await loadLeaves(data.id)
       }
     })
   }, [])
 
   async function handleSave() {
-    if (!userId) { setError('User record not loaded yet — please wait and try again.'); return }
-    setSaving(true)
-    setError('')
-    setSaved(false)
-
-    console.log('[profile] saving for userId:', userId, 'data:', form)
-    const { error: updateErr } = await supabaseAdmin
-      .from('users')
-      .update({
-        name: form.name,
-        role: form.role || null,
-        location: form.location || null,
-        is_bd_associate: form.is_bd_associate,
-      })
-      .eq('id', userId)
-    console.log('[profile] update error:', updateErr)
-
+    if (!userId) { setSaveError('User record not loaded yet.'); return }
+    setSaving(true); setSaveError(''); setSaved(false)
+    const { error } = await supabaseAdmin.from('users').update({
+      name: form.name, role: form.role || null,
+      location: form.location || null, is_bd_associate: form.is_bd_associate,
+    }).eq('id', userId)
     setSaving(false)
-    if (updateErr) {
-      setError(updateErr.message)
-    } else {
-      setSaved(true)
+    if (error) setSaveError(error.message)
+    else setSaved(true)
+  }
+
+  async function cancelLeave(id: string) {
+    setLeaveSaving(true)
+    const leave = upcomingLeaves.find(l => l.id === id)
+    await supabaseAdmin.from('leaves').update({ status: 'cancelled' }).eq('id', id).eq('user_id', userId)
+    if (leave?.status === 'approved') {
+      const field = leave.type === 'sick' ? 'sick_leaves' : leave.type === 'earned' ? 'earned_leaves' : 'wfh_days'
+      const { data: bal } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', userId).single()
+      if (bal) await supabaseAdmin.from('leave_balance').update({ [field]: (bal as any)[field] + leave.value }).eq('user_id', userId)
     }
+    await loadLeaves(userId)
+    setLeaveSaving(false)
+  }
+
+  function startEdit(leave: Leave) {
+    setEditingId(leave.id)
+    setEditState({ type: leave.type, date_from: leave.date_from, date_to: leave.date_to, value: String(leave.value), reason: leave.reason || '' })
+  }
+
+  async function saveEdit(id: string) {
+    setLeaveSaving(true)
+    await supabaseAdmin.from('leaves').update({
+      type: editState.type, date_from: editState.date_from, date_to: editState.date_to,
+      reason: editState.reason, value: parseFloat(editState.value),
+    }).eq('id', id).eq('user_id', userId)
+    setEditingId(null)
+    await loadLeaves(userId)
+    setLeaveSaving(false)
   }
 
   if (!user) return null
+
+  const TAB_LABELS: { key: Tab; label: string }[] = [
+    { key: 'profile', label: 'Profile' },
+    { key: 'leaves',  label: 'Leaves' },
+    { key: 'logs',    label: 'Logs' },
+  ]
 
   return (
     <main className="min-h-screen bg-[#F5F2EE]">
       <Nav isAdmin={isAdmin} />
 
-      <div className="px-12 py-12 max-w-2xl mx-auto">
-        <h2 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-10">Profile</h2>
+      <div className="px-12 py-12 max-w-3xl mx-auto">
+        <h2 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">
+          {user.user_metadata?.full_name || user.email}
+        </h2>
+        <p className="text-2xl font-light tracking-wide text-[#1a1a1a] mb-8">My Account</p>
 
-        <div className="border border-[#ddd] bg-white p-10 space-y-8">
-          <div>
-            <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Full Name</label>
-            <input
-              type="text"
-              value={form.name}
-              onChange={e => setForm({ ...form, name: e.target.value })}
-              className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-sm text-[#1a1a1a] focus:outline-none focus:border-[#aaa]"
-              placeholder="Your name"
-            />
-          </div>
-
-          <div>
-            <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Role</label>
-            <select
-              value={form.role}
-              onChange={e => setForm({ ...form, role: e.target.value })}
-              className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider text-[#1a1a1a] focus:outline-none"
-            >
-              <option value="">Select role</option>
-              {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Location</label>
-            <select
-              value={form.location}
-              onChange={e => setForm({ ...form, location: e.target.value })}
-              className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider text-[#1a1a1a] focus:outline-none"
-            >
-              <option value="">Select location</option>
-              {LOCATIONS.map(l => <option key={l} value={l}>{l}</option>)}
-            </select>
-          </div>
-
-          <div className="flex items-center justify-between py-4 border-t border-[#eee]">
-            <div>
-              <p className="text-xs tracking-[0.25em] uppercase text-[#888]">BD Associate</p>
-              <p className="text-xs text-[#bbb] mt-1">Business development role</p>
-            </div>
+        {/* Tabs */}
+        <div className="flex gap-0 border-b border-[#ddd] mb-8">
+          {TAB_LABELS.map(({ key, label }) => (
             <button
-              onClick={() => setForm({ ...form, is_bd_associate: !form.is_bd_associate })}
-              className={`relative w-12 h-6 rounded-full transition-colors duration-200 cursor-pointer focus:outline-none ${
-                form.is_bd_associate ? 'bg-[#1a1a1a]' : 'bg-[#ddd]'
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`px-6 py-3 text-xs tracking-[0.2em] uppercase transition-colors cursor-pointer border-b-2 -mb-px ${
+                activeTab === key
+                  ? 'border-[#1a1a1a] text-[#1a1a1a]'
+                  : 'border-transparent text-[#aaa] hover:text-[#1a1a1a]'
               }`}
             >
-              <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all duration-200 ${
-                form.is_bd_associate ? 'left-7' : 'left-1'
-              }`} />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Profile Tab */}
+        {activeTab === 'profile' && (
+          <div className="border border-[#ddd] bg-white p-10 space-y-8">
+            <div>
+              <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Full Name</label>
+              <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
+                className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-sm text-[#1a1a1a] focus:outline-none focus:border-[#aaa]"
+                placeholder="Your name" />
+            </div>
+            <div>
+              <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Role</label>
+              <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}
+                className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider text-[#1a1a1a] focus:outline-none">
+                <option value="">Select role</option>
+                {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Location</label>
+              <select value={form.location} onChange={e => setForm({ ...form, location: e.target.value })}
+                className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider text-[#1a1a1a] focus:outline-none">
+                <option value="">Select location</option>
+                {LOCATIONS.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center justify-between py-4 border-t border-[#eee]">
+              <div>
+                <p className="text-xs tracking-[0.25em] uppercase text-[#888]">BD Associate</p>
+                <p className="text-xs text-[#bbb] mt-1">Business development role</p>
+              </div>
+              <button
+                onClick={() => setForm({ ...form, is_bd_associate: !form.is_bd_associate })}
+                className={`relative w-12 h-6 rounded-full transition-colors duration-200 cursor-pointer focus:outline-none ${form.is_bd_associate ? 'bg-[#1a1a1a]' : 'bg-[#ddd]'}`}
+              >
+                <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all duration-200 ${form.is_bd_associate ? 'left-7' : 'left-1'}`} />
+              </button>
+            </div>
+            {saveError && <p className="text-xs text-red-400 tracking-wider">{saveError}</p>}
+            {saved && <p className="text-xs text-emerald-600 tracking-wider">Profile saved.</p>}
+            <button onClick={handleSave} disabled={saving}
+              className="w-full py-3 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all cursor-pointer disabled:opacity-40">
+              {saving ? 'Saving…' : 'Save Profile'}
             </button>
           </div>
+        )}
 
-          {error && <p className="text-xs text-red-400 tracking-wider">{error}</p>}
-          {saved && <p className="text-xs text-emerald-600 tracking-wider">Profile saved.</p>}
+        {/* Leaves Tab */}
+        {activeTab === 'leaves' && (
+          <div>
+            <div className="flex items-center justify-between mb-5">
+              <p className="text-xs text-[#888] tracking-wider">Upcoming and pending leaves</p>
+              <button onClick={() => router.push('/apply')}
+                className="px-6 py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all cursor-pointer">
+                Apply for Leave
+              </button>
+            </div>
+            {upcomingLeaves.length === 0 ? (
+              <p className="text-sm text-[#bbb] tracking-wider">No upcoming or pending leaves.</p>
+            ) : (
+              <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
+                {upcomingLeaves.map(leave => (
+                  <div key={leave.id}>
+                    {editingId === leave.id ? (
+                      <div className="px-8 py-6 space-y-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Type</label>
+                            <select value={editState.type} onChange={e => setEditState({ ...editState, type: e.target.value })}
+                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
+                              <option value="sick">Sick Leave</option>
+                              <option value="earned">Earned Leave</option>
+                              <option value="wfh">WFH</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Duration</label>
+                            <select value={editState.value} onChange={e => setEditState({ ...editState, value: e.target.value })}
+                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
+                              <option value="1">Full Day</option>
+                              <option value="0.5">Half Day</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">From</label>
+                            <input type="date" value={editState.date_from} onChange={e => setEditState({ ...editState, date_from: e.target.value })}
+                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                          </div>
+                          <div>
+                            <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">To</label>
+                            <input type="date" value={editState.date_to} onChange={e => setEditState({ ...editState, date_to: e.target.value })}
+                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Reason</label>
+                          <input type="text" value={editState.reason} onChange={e => setEditState({ ...editState, reason: e.target.value })}
+                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                        </div>
+                        <div className="flex gap-3">
+                          <button onClick={() => saveEdit(leave.id)} disabled={leaveSaving}
+                            className="px-6 py-2 border border-[#1a1a1a] text-xs tracking-wider uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">Save</button>
+                          <button onClick={() => setEditingId(null)}
+                            className="px-6 py-2 border border-[#ddd] text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer">Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="px-8 py-5 flex items-center justify-between">
+                        <div>
+                          <p className="text-xs tracking-[0.2em] uppercase text-[#1a1a1a]">{leave.type} leave</p>
+                          <p className="text-xs text-[#888] mt-1">
+                            {fmtShort(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmtShort(leave.date_to)}` : ''}
+                            {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          {leave.status === 'pending' && (
+                            <button onClick={() => startEdit(leave)}
+                              className="text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer">Modify</button>
+                          )}
+                          <button onClick={() => cancelLeave(leave.id)} disabled={leaveSaving}
+                            className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">Cancel</button>
+                          <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                            {leave.status}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="w-full py-3 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all duration-300 cursor-pointer disabled:opacity-40"
-          >
-            {saving ? 'Saving…' : 'Save Profile'}
-          </button>
-        </div>
+        {/* Logs Tab */}
+        {activeTab === 'logs' && (
+          <div>
+            <p className="text-xs text-[#888] tracking-wider mb-5">Full leave history — all statuses</p>
+            {allLeaves.length === 0 ? (
+              <p className="text-sm text-[#bbb] tracking-wider">No leave records yet.</p>
+            ) : (
+              <div className="border border-[#ddd] bg-white overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#eee]">
+                      {['Type', 'From', 'To', 'Duration', 'Status', 'Reason'].map(h => (
+                        <th key={h} className="px-5 py-3 text-left text-xs tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f5f5f5]">
+                    {allLeaves.map(log => (
+                      <tr key={log.id} className="hover:bg-[#fafafa]">
+                        <td className="px-5 py-4 text-xs text-[#1a1a1a] uppercase tracking-wider">{log.type}</td>
+                        <td className="px-5 py-4 text-xs text-[#888]">{fmt(log.date_from)}</td>
+                        <td className="px-5 py-4 text-xs text-[#888]">{fmt(log.date_to)}</td>
+                        <td className="px-5 py-4 text-xs text-[#888]">
+                          {log.value === 0.5 ? 'Half day' : `${log.value}d`}
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className={`text-xs tracking-widest uppercase px-2 py-0.5 ${STATUS_STYLES[log.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                            {log.status}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-xs max-w-[180px]">
+                          {log.status === 'rejected' && log.rejection_reason ? (
+                            <span className="text-red-400 italic">{log.rejection_reason}</span>
+                          ) : log.reason ? (
+                            <span className="text-[#888]">{log.reason}</span>
+                          ) : (
+                            <span className="text-[#ccc]">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
     </main>
   )
