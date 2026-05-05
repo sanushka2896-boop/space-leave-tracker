@@ -82,7 +82,7 @@ export default function Dashboard() {
 
     const [
       { data: bal },
-      { data: lvs },
+      { data: allLeaves },
       { data: reviewRows },
       { data: holidayRows },
       { data: teamLeaveRows },
@@ -90,7 +90,7 @@ export default function Dashboard() {
       { data: myWsRows },
     ] = await Promise.all([
       supabaseAdmin.from('leave_balance').select('*').eq('user_id', uid).single(),
-      supabaseAdmin.from('leaves').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
+      supabaseAdmin.from('leaves').select('*').eq('user_id', uid).in('status', ['approved', 'pending']).order('date_from', { ascending: true }),
       supabaseAdmin.from('reviews').select('date, type').eq('user_id', uid).gte('date', todayStr).order('date', { ascending: true }).limit(1),
       supabaseAdmin.from('holidays').select('id, name, date').gte('date', todayStr).lte('date', in30Str).order('date', { ascending: true }),
       supabaseAdmin.from('leaves').select('date_from, date_to, type, users(name)').neq('user_id', uid).eq('status', 'approved').lte('date_from', weekEndStr).gte('date_to', weekStartStr),
@@ -99,7 +99,11 @@ export default function Dashboard() {
     ])
 
     if (bal) setBalance(bal)
-    setLeaves(lvs ?? [])
+    // Show upcoming approved leaves (date_from >= today) and all pending leaves
+    const lvs = (allLeaves ?? []).filter((l: any) =>
+      l.status === 'pending' || (l.status === 'approved' && l.date_from >= todayStr)
+    )
+    setLeaves(lvs)
 
     const teamOnLeave = (teamLeaveRows ?? []).map((l: any) => ({
       name: l.users?.name || 'Team',
@@ -331,9 +335,9 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Leave History */}
+        {/* My Leaves */}
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888]">Leave History</h3>
+          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888]">My Leaves</h3>
           <button
             onClick={() => router.push('/apply')}
             className="px-8 py-2.5 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all duration-300 cursor-pointer"
@@ -343,7 +347,7 @@ export default function Dashboard() {
         </div>
 
         {leaves.length === 0 ? (
-          <p className="text-sm text-[#bbb] tracking-wider">No leaves applied yet.</p>
+          <p className="text-sm text-[#bbb] tracking-wider">No upcoming or pending leaves.</p>
         ) : (
           <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
             {leaves.map(leave => (
@@ -417,12 +421,10 @@ export default function Dashboard() {
                           Modify
                         </button>
                       )}
-                      {(leave.status === 'pending' || leave.status === 'approved') && (
-                        <button onClick={() => cancelLeave(leave.id)} disabled={saving}
-                          className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">
-                          Cancel
-                        </button>
-                      )}
+                      <button onClick={() => cancelLeave(leave.id)} disabled={saving}
+                        className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">
+                        Cancel
+                      </button>
                       <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
                         {leave.status}
                       </span>

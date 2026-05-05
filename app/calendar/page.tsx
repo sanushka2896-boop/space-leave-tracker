@@ -69,7 +69,7 @@ export default function CalendarPage() {
           .from('leaves')
           .select('*')
           .eq('user_id', dbUser.id)
-          .neq('status', 'cancelled'),
+          .in('status', ['approved', 'pending']),
         supabaseAdmin
           .from('leaves')
           .select('*, users(name)')

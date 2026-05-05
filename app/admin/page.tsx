@@ -56,31 +56,40 @@ export default function AdminPage() {
   const [reviews, setReviews] = useState<Review[]>([])
   const [workingSaturdays, setWorkingSaturdays] = useState<WorkingSaturday[]>([])
   const [acting, setActing] = useState<string | null>(null)
-  const [saveError, setSaveError] = useState('')
+  const [actionError, setActionError] = useState('')
 
   const [hForm, setHForm] = useState({ name: '', date: '', type: 'national' })
   const [hSaving, setHSaving] = useState(false)
+  const [hError, setHError] = useState('')
 
   const [rForm, setRForm] = useState({ user_id: '', date: '', type: 'annual', notes: '' })
   const [rSaving, setRSaving] = useState(false)
+  const [rError, setRError] = useState('')
   const [rEditId, setREditId] = useState<string | null>(null)
 
   const [aForm, setAForm] = useState({ user_id: '', type: 'earned', date_from: '', date_to: '', value: '1' })
   const [aSaving, setASaving] = useState(false)
   const [aError, setAError] = useState('')
 
+  const [qForm, setQForm] = useState({ user_id: '', sick_leaves: '12', earned_leaves: '15', wfh_days: '24' })
+  const [qSaving, setQSaving] = useState(false)
+  const [qError, setQError] = useState('')
+  const [qSuccess, setQSuccess] = useState('')
+
   const [wsDate, setWsDate] = useState('')
   const [wsSaving, setWsSaving] = useState(false)
+  const [wsError, setWsError] = useState('')
 
   const router = useRouter()
 
   async function loadData() {
+    console.log('[Admin] loadData: fetching all data...')
     const [
-      { data: leavesRaw },
-      { data: usersRaw },
-      { data: holidaysRaw },
-      { data: reviewsRaw },
-      { data: wsRaw },
+      { data: leavesRaw, error: leavesErr },
+      { data: usersRaw, error: usersErr },
+      { data: holidaysRaw, error: holidaysErr },
+      { data: reviewsRaw, error: reviewsErr },
+      { data: wsRaw, error: wsErr },
     ] = await Promise.all([
       supabaseAdmin.from('leaves').select('*').eq('status', 'pending').order('created_at', { ascending: false }),
       supabaseAdmin.from('users').select('id, name, email, role, location, is_bd_associate, is_admin'),
@@ -88,6 +97,20 @@ export default function AdminPage() {
       supabaseAdmin.from('reviews').select('id, user_id, date, type, notes, created_at').order('date', { ascending: true }),
       supabaseAdmin.from('working_saturdays').select('*').is('user_id', null).order('date', { ascending: true }),
     ])
+
+    if (leavesErr) console.error('[Admin] loadData leaves error:', leavesErr)
+    if (usersErr) console.error('[Admin] loadData users error:', usersErr)
+    if (holidaysErr) console.error('[Admin] loadData holidays error:', holidaysErr)
+    if (reviewsErr) console.error('[Admin] loadData reviews error:', reviewsErr)
+    if (wsErr) console.error('[Admin] loadData working_saturdays error:', wsErr)
+
+    console.log('[Admin] loadData results:', {
+      leaves: leavesRaw?.length,
+      users: usersRaw?.length,
+      holidays: holidaysRaw?.length,
+      reviews: reviewsRaw?.length,
+      workingSaturdays: wsRaw?.length,
+    })
 
     const userMap: Record<string, { name: string; email: string }> = {}
     for (const u of usersRaw ?? []) userMap[u.id] = { name: u.name, email: u.email }
@@ -98,8 +121,10 @@ export default function AdminPage() {
     const userIds = (usersRaw ?? []).map((u: any) => u.id)
     let balances: any[] = []
     if (userIds.length > 0) {
-      const { data: b } = await supabaseAdmin.from('leave_balance').select('*').in('user_id', userIds)
+      const { data: b, error: balErr } = await supabaseAdmin.from('leave_balance').select('*').in('user_id', userIds)
+      if (balErr) console.error('[Admin] loadData leave_balance error:', balErr)
       balances = b ?? []
+      console.log('[Admin] loadData balances:', balances.length)
     }
 
     const enrichedTeam: TeamMember[] = (usersRaw ?? []).map((u: any) => ({
@@ -118,11 +143,14 @@ export default function AdminPage() {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) { router.push('/'); return }
 
-      const { data: dbUser } = await supabaseAdmin
+      console.log('[Admin] checking admin status for:', session.user.email)
+      const { data: dbUser, error: dbErr } = await supabaseAdmin
         .from('users')
         .select('id, is_admin')
         .eq('email', session.user.email)
         .single()
+
+      if (dbErr) console.error('[Admin] user lookup error:', dbErr)
 
       if (!dbUser?.is_admin) { router.push('/dashboard'); return }
 
@@ -134,21 +162,30 @@ export default function AdminPage() {
 
   async function handleLeaveAction(id: string, action: 'approve' | 'reject') {
     setActing(id + action)
-    setSaveError('')
+    setActionError('')
     const newStatus = action === 'approve' ? 'approved' : 'rejected'
 
     const leave = pendingLeaves.find(l => l.id === id)
     if (!leave) { setActing(null); return }
 
+    console.log('[Admin] handleLeaveAction:', { id, action, newStatus, leave })
+
     const { error: updateErr } = await supabaseAdmin.from('leaves').update({ status: newStatus }).eq('id', id)
-    if (updateErr) { setSaveError(updateErr.message); setActing(null); return }
+    if (updateErr) {
+      console.error('[Admin] handleLeaveAction update error:', updateErr)
+      setActionError(`Failed to ${action}: ${updateErr.message}`)
+      setActing(null)
+      return
+    }
 
     if (action === 'approve') {
       const field = leave.type === 'sick' ? 'sick_leaves' : leave.type === 'earned' ? 'earned_leaves' : 'wfh_days'
-      const { data: bal } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', leave.user_id).single()
+      const { data: bal, error: balErr } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', leave.user_id).single()
+      if (balErr) console.error('[Admin] handleLeaveAction balance fetch error:', balErr)
       if (bal) {
         const current = (bal as any)[field] as number
-        await supabaseAdmin.from('leave_balance').update({ [field]: Math.max(0, current - leave.value) }).eq('user_id', leave.user_id)
+        const { error: balUpdateErr } = await supabaseAdmin.from('leave_balance').update({ [field]: Math.max(0, current - leave.value) }).eq('user_id', leave.user_id)
+        if (balUpdateErr) console.error('[Admin] handleLeaveAction balance update error:', balUpdateErr)
       }
     }
 
@@ -158,24 +195,34 @@ export default function AdminPage() {
 
   async function addHoliday() {
     if (!hForm.name || !hForm.date) return
-    setSaveError('')
+    setHError('')
     setHSaving(true)
-    const { error } = await supabaseAdmin.from('holidays').insert({ name: hForm.name, date: hForm.date, type: hForm.type })
-    if (error) { setSaveError(error.message); setHSaving(false); return }
+    console.log('[Admin] addHoliday:', hForm)
+    const { data, error } = await supabaseAdmin.from('holidays').insert({ name: hForm.name, date: hForm.date, type: hForm.type }).select()
+    console.log('[Admin] addHoliday result:', { data, error })
+    if (error) {
+      console.error('[Admin] addHoliday error:', error)
+      setHError(error.message)
+      setHSaving(false)
+      return
+    }
     setHForm({ name: '', date: '', type: 'national' })
     await loadData()
     setHSaving(false)
   }
 
   async function deleteHoliday(id: string) {
-    await supabaseAdmin.from('holidays').delete().eq('id', id)
+    console.log('[Admin] deleteHoliday:', id)
+    const { error } = await supabaseAdmin.from('holidays').delete().eq('id', id)
+    if (error) console.error('[Admin] deleteHoliday error:', error)
     await loadData()
   }
 
   async function saveReview() {
     if (!rForm.user_id || !rForm.date) return
-    setSaveError('')
+    setRError('')
     setRSaving(true)
+    console.log('[Admin] saveReview:', { rForm, rEditId, adminUserId })
 
     let error: any
     if (rEditId) {
@@ -184,14 +231,21 @@ export default function AdminPage() {
         .update({ date: rForm.date, type: rForm.type, notes: rForm.notes || null })
         .eq('id', rEditId)
       error = res.error
+      console.log('[Admin] saveReview update result:', { data: res.data, error: res.error })
     } else {
       const res = await supabaseAdmin
         .from('reviews')
         .insert({ user_id: rForm.user_id, date: rForm.date, type: rForm.type, notes: rForm.notes || null, created_by: adminUserId || null })
       error = res.error
+      console.log('[Admin] saveReview insert result:', { data: res.data, error: res.error })
     }
 
-    if (error) { setSaveError(error.message); setRSaving(false); return }
+    if (error) {
+      console.error('[Admin] saveReview error:', error)
+      setRError(error.message)
+      setRSaving(false)
+      return
+    }
     setREditId(null)
     setRForm({ user_id: '', date: '', type: 'annual', notes: '' })
     await loadData()
@@ -199,13 +253,16 @@ export default function AdminPage() {
   }
 
   async function deleteReview(id: string) {
-    await supabaseAdmin.from('reviews').delete().eq('id', id)
+    console.log('[Admin] deleteReview:', id)
+    const { error } = await supabaseAdmin.from('reviews').delete().eq('id', id)
+    if (error) console.error('[Admin] deleteReview error:', error)
     await loadData()
   }
 
   function startEditReview(r: Review) {
     setREditId(r.id)
     setRForm({ user_id: r.user_id, date: r.date, type: r.type, notes: r.notes || '' })
+    setRError('')
   }
 
   async function assignLeave() {
@@ -214,7 +271,8 @@ export default function AdminPage() {
     setASaving(true)
 
     const value = parseFloat(aForm.value)
-    const { error: insertErr } = await supabaseAdmin.from('leaves').insert({
+    console.log('[Admin] assignLeave:', { ...aForm, value })
+    const { data, error: insertErr } = await supabaseAdmin.from('leaves').insert({
       user_id: aForm.user_id,
       type: aForm.type,
       date_from: aForm.date_from,
@@ -222,15 +280,23 @@ export default function AdminPage() {
       value,
       status: 'approved',
       reason: 'Assigned by admin',
-    })
+    }).select()
+    console.log('[Admin] assignLeave result:', { data, error: insertErr })
 
-    if (insertErr) { setAError(insertErr.message); setASaving(false); return }
+    if (insertErr) {
+      console.error('[Admin] assignLeave error:', insertErr)
+      setAError(insertErr.message)
+      setASaving(false)
+      return
+    }
 
     const field = aForm.type === 'sick' ? 'sick_leaves' : aForm.type === 'earned' ? 'earned_leaves' : 'wfh_days'
-    const { data: bal } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', aForm.user_id).single()
+    const { data: bal, error: balErr } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', aForm.user_id).single()
+    if (balErr) console.error('[Admin] assignLeave balance fetch error:', balErr)
     if (bal) {
       const current = (bal as any)[field] as number
-      await supabaseAdmin.from('leave_balance').update({ [field]: Math.max(0, current - value) }).eq('user_id', aForm.user_id)
+      const { error: balUpdateErr } = await supabaseAdmin.from('leave_balance').update({ [field]: Math.max(0, current - value) }).eq('user_id', aForm.user_id)
+      if (balUpdateErr) console.error('[Admin] assignLeave balance update error:', balUpdateErr)
     }
 
     setAForm({ user_id: '', type: 'earned', date_from: '', date_to: '', value: '1' })
@@ -238,21 +304,84 @@ export default function AdminPage() {
     setASaving(false)
   }
 
+  async function saveQuota() {
+    if (!qForm.user_id) return
+    setQError('')
+    setQSuccess('')
+    setQSaving(true)
+
+    const sick_leaves = parseInt(qForm.sick_leaves) || 0
+    const earned_leaves = parseInt(qForm.earned_leaves) || 0
+    const wfh_days = parseInt(qForm.wfh_days) || 0
+    const payload = { user_id: qForm.user_id, sick_leaves, earned_leaves, wfh_days }
+
+    console.log('[Admin] saveQuota payload:', payload)
+
+    const { data: existing, error: fetchErr } = await supabaseAdmin
+      .from('leave_balance')
+      .select('id')
+      .eq('user_id', qForm.user_id)
+      .single()
+
+    if (fetchErr && fetchErr.code !== 'PGRST116') {
+      console.error('[Admin] saveQuota fetch error:', fetchErr)
+    }
+
+    let saveErr: any
+    if (existing) {
+      console.log('[Admin] saveQuota: updating existing record', existing.id)
+      const res = await supabaseAdmin
+        .from('leave_balance')
+        .update({ sick_leaves, earned_leaves, wfh_days })
+        .eq('user_id', qForm.user_id)
+      saveErr = res.error
+      console.log('[Admin] saveQuota update result:', { data: res.data, error: res.error })
+    } else {
+      console.log('[Admin] saveQuota: inserting new record')
+      const res = await supabaseAdmin
+        .from('leave_balance')
+        .insert(payload)
+      saveErr = res.error
+      console.log('[Admin] saveQuota insert result:', { data: res.data, error: res.error })
+    }
+
+    if (saveErr) {
+      console.error('[Admin] saveQuota error:', saveErr)
+      setQError(saveErr.message)
+      setQSaving(false)
+      return
+    }
+
+    console.log('[Admin] saveQuota success')
+    setQSuccess('Quota updated successfully.')
+    await loadData()
+    setQSaving(false)
+  }
+
   async function addWorkingSaturday() {
     if (!wsDate) return
     const d = new Date(wsDate + 'T00:00:00')
-    if (d.getDay() !== 6) { setSaveError('Date must be a Saturday.'); return }
-    setSaveError('')
+    if (d.getDay() !== 6) { setWsError('Date must be a Saturday.'); return }
+    setWsError('')
     setWsSaving(true)
-    const { error } = await supabaseAdmin.from('working_saturdays').insert({ date: wsDate, user_id: null })
-    if (error) { setSaveError(error.message); setWsSaving(false); return }
+    console.log('[Admin] addWorkingSaturday:', wsDate)
+    const { data, error } = await supabaseAdmin.from('working_saturdays').insert({ date: wsDate, user_id: null }).select()
+    console.log('[Admin] addWorkingSaturday result:', { data, error })
+    if (error) {
+      console.error('[Admin] addWorkingSaturday error:', error)
+      setWsError(error.message)
+      setWsSaving(false)
+      return
+    }
     setWsDate('')
     await loadData()
     setWsSaving(false)
   }
 
   async function removeWorkingSaturday(id: string) {
-    await supabaseAdmin.from('working_saturdays').delete().eq('id', id)
+    console.log('[Admin] removeWorkingSaturday:', id)
+    const { error } = await supabaseAdmin.from('working_saturdays').delete().eq('id', id)
+    if (error) console.error('[Admin] removeWorkingSaturday error:', error)
     await loadData()
   }
 
@@ -274,7 +403,7 @@ export default function AdminPage() {
             Pending Requests
             {pendingLeaves.length > 0 && <span className="ml-3 text-amber-600">({pendingLeaves.length})</span>}
           </h3>
-          {saveError && <p className="text-xs text-red-400 tracking-wider mb-4">{saveError}</p>}
+          {actionError && <p className="text-xs text-red-400 tracking-wider mb-4">{actionError}</p>}
           {pendingLeaves.length === 0 ? (
             <p className="text-sm text-[#bbb] tracking-wider">No pending requests.</p>
           ) : (
@@ -345,6 +474,77 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </section>
+
+        {/* Leave Quota Assignment */}
+        <section>
+          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Leave Quota Assignment</h3>
+          <p className="text-xs text-[#bbb] tracking-wider mb-6">Set annual leave quotas per employee. This updates their leave_balance directly.</p>
+          <div className="border border-[#ddd] bg-white p-6 max-w-xl space-y-4">
+            <div>
+              <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Employee</label>
+              <select
+                value={qForm.user_id}
+                onChange={e => {
+                  const uid = e.target.value
+                  const member = team.find(m => m.id === uid)
+                  setQForm({
+                    user_id: uid,
+                    sick_leaves: member ? String(member.balance.sick_leaves) : '12',
+                    earned_leaves: member ? String(member.balance.earned_leaves) : '15',
+                    wfh_days: member ? String(member.balance.wfh_days) : '24',
+                  })
+                  setQError('')
+                  setQSuccess('')
+                }}
+                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
+              >
+                <option value="">Select employee</option>
+                {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Sick Leaves</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={qForm.sick_leaves}
+                  onChange={e => setQForm({ ...qForm, sick_leaves: e.target.value })}
+                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Earned Leaves</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={qForm.earned_leaves}
+                  onChange={e => setQForm({ ...qForm, earned_leaves: e.target.value })}
+                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">WFH Days</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={qForm.wfh_days}
+                  onChange={e => setQForm({ ...qForm, wfh_days: e.target.value })}
+                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
+                />
+              </div>
+            </div>
+            {qError && <p className="text-xs text-red-400">{qError}</p>}
+            {qSuccess && <p className="text-xs text-emerald-600">{qSuccess}</p>}
+            <button
+              onClick={saveQuota}
+              disabled={qSaving || !qForm.user_id}
+              className="w-full py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
+            >
+              {qSaving ? 'Saving…' : 'Set Quota'}
+            </button>
           </div>
         </section>
 
@@ -445,6 +645,7 @@ export default function AdminPage() {
                 <option value="national">National</option>
                 <option value="company">Company</option>
               </select>
+              {hError && <p className="text-xs text-red-400">{hError}</p>}
               <button
                 onClick={addHoliday}
                 disabled={hSaving || !hForm.name || !hForm.date}
@@ -489,6 +690,7 @@ export default function AdminPage() {
                 className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
               />
               <p className="text-[10px] text-[#bbb] tracking-wider">Must be a Saturday</p>
+              {wsError && <p className="text-xs text-red-400">{wsError}</p>}
               <button
                 onClick={addWorkingSaturday}
                 disabled={wsSaving || !wsDate}
@@ -554,7 +756,7 @@ export default function AdminPage() {
                 rows={3}
                 className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none resize-none"
               />
-              {saveError && <p className="text-xs text-red-400">{saveError}</p>}
+              {rError && <p className="text-xs text-red-400">{rError}</p>}
               <div className="flex gap-3">
                 <button
                   onClick={saveReview}
@@ -565,7 +767,7 @@ export default function AdminPage() {
                 </button>
                 {rEditId && (
                   <button
-                    onClick={() => { setREditId(null); setRForm({ user_id: '', date: '', type: 'annual', notes: '' }) }}
+                    onClick={() => { setREditId(null); setRForm({ user_id: '', date: '', type: 'annual', notes: '' }); setRError('') }}
                     className="px-4 py-2 border border-[#ddd] text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] transition-colors cursor-pointer"
                   >
                     Cancel
