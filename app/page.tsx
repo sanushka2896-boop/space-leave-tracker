@@ -6,7 +6,7 @@ export default function Home() {
     await supabase.auth.signInWithOAuth({
       provider: 'slack_oidc',
       options: {
-        redirectTo: `${window.location.origin}/dashboard`
+        redirectTo: window.location.origin + '/dashboard'
       }
     })
   }
