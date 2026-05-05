@@ -48,9 +48,12 @@ export default function LogsPage() {
 
       if (!dbUser) { setLoading(false); return }
 
-      setIsAdmin(dbUser.is_admin ?? false)
+      const uid: string = dbUser.id
+      const adminFlag: boolean = dbUser.is_admin === true
 
-      if (dbUser.is_admin) {
+      setIsAdmin(adminFlag)
+
+      if (adminFlag) {
         const [{ data: users }, { data: allLeaves }] = await Promise.all([
           supabaseAdmin.from('users').select('id, name, email').order('name'),
           supabaseAdmin
@@ -63,8 +66,8 @@ export default function LogsPage() {
       } else {
         const { data: myLeaves } = await supabaseAdmin
           .from('leaves')
-          .select('*')
-          .eq('user_id', dbUser.id)
+          .select('id, user_id, type, date_from, date_to, value, reason, status, rejection_reason')
+          .eq('user_id', uid)
           .order('created_at', { ascending: false })
         setLogs(myLeaves ?? [])
       }
