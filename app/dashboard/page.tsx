@@ -12,6 +12,23 @@ type Leave = {
 type EditState = { type: string; date_from: string; date_to: string; value: string; reason: string }
 type BalanceItem = { remaining: number; taken: number; scheduled: number }
 type TeamPerson = { name: string; type: string; date_from: string; date_to: string }
+type ClockLog = { id: string; user_id: string; date: string; clock_in: string | null; clock_out: string | null; users?: { name: string } | null }
+
+function nowTime() {
+  const n = new Date()
+  return n.toTimeString().slice(0, 5) // "HH:MM"
+}
+function fmtTime(t: string | null) {
+  if (!t) return '—'
+  const [h, m] = t.split(':').map(Number)
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
+}
+function minutesDiff(a: string, b: string) {
+  const [ah, am] = a.split(':').map(Number)
+  const [bh, bm] = b.split(':').map(Number)
+  return (bh * 60 + bm) - (ah * 60 + am)
+}
 
 const STATUS_STYLES: Record<string, string> = {
   pending: 'text-amber-600 bg-amber-50',
@@ -54,7 +71,62 @@ export default function Dashboard() {
   const [saving, setSaving] = useState(false)
   const [wsDate, setWsDate] = useState('')
   const [wsAdding, setWsAdding] = useState(false)
+  const [todayClock, setTodayClock] = useState<ClockLog | null>(null)
+  const [clockAction, setClockAction] = useState(false)
+  const [allClockLogs, setAllClockLogs] = useState<ClockLog[]>([])
   const router = useRouter()
+
+  async function loadClockData(uid: string, adminFlag: boolean) {
+    const todayStr = new Date().toISOString().split('T')[0]
+    const { data: myLog } = await supabaseAdmin
+      .from('clock_logs').select('*').eq('user_id', uid).eq('date', todayStr).maybeSingle()
+    setTodayClock(myLog ?? null)
+    if (adminFlag) {
+      const { data: allLogs } = await supabaseAdmin
+        .from('clock_logs').select('*, users(name)').eq('date', todayStr).order('clock_in', { ascending: true })
+      setAllClockLogs(allLogs ?? [])
+    }
+  }
+
+  async function clockIn(uid: string, adminFlag: boolean) {
+    setClockAction(true)
+    const todayStr = new Date().toISOString().split('T')[0]
+    const t = nowTime()
+    const { data, error } = await supabaseAdmin.from('clock_logs')
+      .insert({ user_id: uid, date: todayStr, clock_in: t }).select().single()
+    if (!error && data) {
+      // auto late arrival if after 10:15
+      if (t > '10:15') {
+        const minLate = minutesDiff('10:00', t)
+        await supabaseAdmin.from('late_arrivals').upsert(
+          { user_id: uid, date: todayStr, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'pending' },
+          { onConflict: 'user_id,date' }
+        )
+      }
+    }
+    await loadClockData(uid, adminFlag)
+    setClockAction(false)
+  }
+
+  async function clockOut(uid: string, adminFlag: boolean) {
+    setClockAction(true)
+    const t = nowTime()
+    const todayStr = new Date().toISOString().split('T')[0]
+    await supabaseAdmin.from('clock_logs').update({ clock_out: t }).eq('user_id', uid).eq('date', todayStr)
+    // if left before 18:00, update minutes_missed on late_arrivals if row exists
+    if (t < '18:00') {
+      const missed = minutesDiff(t, '18:00')
+      await supabaseAdmin.from('late_arrivals')
+        .update({ departure_time: t, minutes_missed: missed })
+        .eq('user_id', uid).eq('date', todayStr)
+    } else {
+      await supabaseAdmin.from('late_arrivals')
+        .update({ departure_time: t, minutes_missed: 0 })
+        .eq('user_id', uid).eq('date', todayStr)
+    }
+    await loadClockData(uid, adminFlag)
+    setClockAction(false)
+  }
 
   async function loadData(uid: string) {
     const today = new Date()
@@ -118,8 +190,9 @@ export default function Dashboard() {
       const { data: dbUser } = await supabaseAdmin.from('users').select('id, is_admin').eq('email', session.user.email).single()
       if (!dbUser) { router.push('/'); return }
       setUserId(dbUser.id)
-      setIsAdmin(dbUser.is_admin ?? false)
-      await loadData(dbUser.id)
+      const adminFlag = dbUser.is_admin === true
+      setIsAdmin(adminFlag)
+      await Promise.all([loadData(dbUser.id), loadClockData(dbUser.id, adminFlag)])
     })
   }, [])
 
@@ -189,6 +262,83 @@ export default function Dashboard() {
           >
             Apply for Leave
           </button>
+        </div>
+
+        {/* Clock In / Out */}
+        <div className="mb-12">
+          <div className="border border-[#ddd] bg-white px-8 py-5 flex items-center justify-between">
+            <div>
+              <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-1">Today's Attendance</p>
+              <div className="flex items-center gap-6">
+                <div>
+                  <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock In</span>
+                  <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_in ?? null)}</p>
+                </div>
+                <div>
+                  <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock Out</span>
+                  <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_out ?? null)}</p>
+                </div>
+                {todayClock?.clock_in && !todayClock.clock_out && todayClock.clock_in > '10:15' && (
+                  <div>
+                    <span className="text-[9px] text-amber-600 uppercase tracking-wider">Late</span>
+                    <p className="text-sm font-light text-amber-600 mt-0.5">{minutesDiff('10:00', todayClock.clock_in)}m</p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => clockIn(userId, isAdmin)}
+                disabled={clockAction || !!todayClock?.clock_in}
+                className="px-6 py-2.5 border border-emerald-600 text-xs tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30"
+              >
+                {clockAction ? '…' : 'Clock In'}
+              </button>
+              <button
+                onClick={() => clockOut(userId, isAdmin)}
+                disabled={clockAction || !todayClock?.clock_in || !!todayClock?.clock_out}
+                className="px-6 py-2.5 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-30"
+              >
+                {clockAction ? '…' : 'Clock Out'}
+              </button>
+            </div>
+          </div>
+
+          {/* Admin: today's team clock log */}
+          {isAdmin && allClockLogs.length > 0 && (
+            <div className="border border-[#ddd] border-t-0 bg-white overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-[#eee]">
+                    {['Employee', 'Clock In', 'Clock Out', 'Status'].map(h => (
+                      <th key={h} className="px-6 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f5f5f5]">
+                  {allClockLogs.map(log => {
+                    const late = log.clock_in && log.clock_in > '10:15'
+                    return (
+                      <tr key={log.id} className="hover:bg-[#fafafa]">
+                        <td className="px-6 py-3 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>
+                        <td className={`px-6 py-3 text-xs ${late ? 'text-amber-600' : 'text-[#888]'}`}>{fmtTime(log.clock_in)}</td>
+                        <td className="px-6 py-3 text-xs text-[#888]">{fmtTime(log.clock_out)}</td>
+                        <td className="px-6 py-3">
+                          {!log.clock_in ? (
+                            <span className="text-[9px] uppercase tracking-wider text-[#ccc]">Absent</span>
+                          ) : late ? (
+                            <span className="text-[9px] uppercase tracking-wider text-amber-600">Late {minutesDiff('10:00', log.clock_in)}m</span>
+                          ) : (
+                            <span className="text-[9px] uppercase tracking-wider text-emerald-600">On time</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Balance Cards */}

@@ -40,6 +40,23 @@ type Review = {
 
 type WorkingSaturday = { id: string; date: string; user_id: string | null }
 
+type OvertimeEntry = {
+  id: string
+  user_id: string
+  date: string
+  login_time: string | null
+  logout_time: string | null
+  overtime_minutes: number | null
+  extra_hours_start: string | null
+  extra_hours_end: string | null
+  reason: string | null
+  compensated_by: string | null
+  approved: boolean
+  approved_by: string | null
+  rejection_reason: string | null
+  users?: { name: string; email: string } | null
+}
+
 const STATUS_STYLES: Record<string, string> = {
   pending: 'text-amber-600 bg-amber-50',
   approved: 'text-emerald-600 bg-emerald-50',
@@ -82,7 +99,20 @@ export default function AdminPage() {
   const [wsSaving, setWsSaving] = useState(false)
   const [wsError, setWsError] = useState('')
 
+  const [overtimeEntries, setOvertimeEntries] = useState<OvertimeEntry[]>([])
+  const [otActingId, setOtActingId] = useState<string | null>(null)
+  const [otRejectingId, setOtRejectingId] = useState<string | null>(null)
+  const [otRejectReason, setOtRejectReason] = useState('')
+
   const router = useRouter()
+
+  async function loadOvertimeEntries() {
+    const { data } = await supabaseAdmin
+      .from('overtime_entries').select('*, users(name, email)')
+      .eq('approved', false).is('rejection_reason', null)
+      .order('date', { ascending: false })
+    setOvertimeEntries(data ?? [])
+  }
 
   async function loadData() {
     console.log('[Admin] loadData: fetching all data...')
@@ -157,7 +187,7 @@ export default function AdminPage() {
       if (!dbUser?.is_admin) { router.push('/dashboard'); return }
 
       setAdminUserId(dbUser.id)
-      await loadData()
+      await Promise.all([loadData(), loadOvertimeEntries()])
       setLoading(false)
     })
   }, [])
@@ -392,6 +422,38 @@ export default function AdminPage() {
 
   function formatDate(d: string) {
     return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+  function fmtTime(t: string | null) {
+    if (!t) return '—'
+    const [h, m] = t.split(':').map(Number)
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
+  }
+  function minutesToHM(mins: number | null) {
+    if (mins === null) return '—'
+    return `${Math.floor(mins / 60)}h ${mins % 60}m`
+  }
+
+  async function approveOvertime(entry: OvertimeEntry) {
+    setOtActingId(entry.id)
+    const adminUser = team.find(m => m.id === adminUserId)
+    const adminName = adminUser?.name || adminUser?.email || 'Admin'
+    await supabaseAdmin.from('overtime_entries')
+      .update({ approved: true, approved_by: adminName, rejection_reason: null })
+      .eq('id', entry.id)
+    await loadOvertimeEntries()
+    setOtActingId(null)
+  }
+
+  async function rejectOvertime(entry: OvertimeEntry, reason: string) {
+    setOtActingId(entry.id)
+    await supabaseAdmin.from('overtime_entries')
+      .update({ approved: false, rejection_reason: reason || 'Rejected' })
+      .eq('id', entry.id)
+    setOtRejectingId(null)
+    setOtRejectReason('')
+    await loadOvertimeEntries()
+    setOtActingId(null)
   }
 
   if (loading) return null
@@ -751,6 +813,72 @@ export default function AdminPage() {
               ))}
             </div>
           </div>
+        </section>
+
+        {/* Overtime Approvals */}
+        <section>
+          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">
+            Overtime Approvals
+            {overtimeEntries.length > 0 && <span className="ml-3 text-amber-600">({overtimeEntries.length})</span>}
+          </h3>
+          {overtimeEntries.length === 0 ? (
+            <p className="text-sm text-[#bbb] tracking-wider">No overtime entries pending approval.</p>
+          ) : (
+            <div className="border border-[#ddd] bg-white overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-[#eee]">
+                    {['Employee', 'Date', 'Login', 'Logout', 'OT Time', 'Extra Hours', 'Reason', 'Compensated By', ''].map(h => (
+                      <th key={h} className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f5f5f5]">
+                  {overtimeEntries.map(e => (
+                    <tr key={e.id} className="hover:bg-[#fafafa]">
+                      <td className="px-4 py-3 text-xs text-[#1a1a1a]">{(e.users as any)?.name || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(e.date)}</td>
+                      <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.login_time)}</td>
+                      <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.logout_time)}</td>
+                      <td className="px-4 py-3 text-xs font-medium text-[#1a1a1a]">{minutesToHM(e.overtime_minutes)}</td>
+                      <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">
+                        {e.extra_hours_start && e.extra_hours_end
+                          ? `${fmtTime(e.extra_hours_start)} – ${fmtTime(e.extra_hours_end)}` : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-[#888] max-w-[120px]">{e.reason || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-[#888] max-w-[120px]">{e.compensated_by || '—'}</td>
+                      <td className="px-4 py-3">
+                        {otRejectingId === e.id ? (
+                          <div className="flex gap-2 items-center">
+                            <input type="text" placeholder="Reason" value={otRejectReason}
+                              onChange={ev => setOtRejectReason(ev.target.value)}
+                              onKeyDown={ev => { if (ev.key === 'Enter') rejectOvertime(e, otRejectReason); if (ev.key === 'Escape') { setOtRejectingId(null); setOtRejectReason('') } }}
+                              autoFocus
+                              className="border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs focus:outline-none w-32" />
+                            <button onClick={() => rejectOvertime(e, otRejectReason)} disabled={!!otActingId}
+                              className="text-xs text-red-400 hover:text-red-600 cursor-pointer disabled:opacity-40">Confirm</button>
+                            <button onClick={() => { setOtRejectingId(null); setOtRejectReason('') }}
+                              className="text-xs text-[#aaa] cursor-pointer">✕</button>
+                          </div>
+                        ) : (
+                          <div className="flex gap-3">
+                            <button onClick={() => approveOvertime(e)} disabled={!!otActingId}
+                              className="px-3 py-1 border border-emerald-600 text-[9px] tracking-wider uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                              {otActingId === e.id ? '…' : 'Approve'}
+                            </button>
+                            <button onClick={() => { setOtRejectingId(e.id); setOtRejectReason('') }} disabled={!!otActingId}
+                              className="px-3 py-1 border border-red-400 text-[9px] tracking-wider uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                              Reject
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
 
         {/* Review Manager */}
