@@ -430,8 +430,11 @@ export default function AdminPage() {
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
   }
   function minutesToHM(mins: number | null) {
-    if (mins === null) return '—'
-    return `${Math.floor(mins / 60)}h ${mins % 60}m`
+    if (mins === null || mins <= 0) return '—'
+    const h = Math.floor(mins / 60), m = mins % 60
+    if (h === 0) return `${m} min${m !== 1 ? 's' : ''}`
+    if (m === 0) return `${h} hr${h !== 1 ? 's' : ''}`
+    return `${h} hr ${m} min${m !== 1 ? 's' : ''}`
   }
 
   async function approveOvertime(entry: OvertimeEntry) {
@@ -463,6 +466,81 @@ export default function AdminPage() {
       <Nav isAdmin={true} />
 
       <div className="px-12 py-12 max-w-6xl mx-auto space-y-16">
+
+        {/* Overtime Approvals — TOP */}
+        <section>
+          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">
+            Overtime Approvals
+            {overtimeEntries.length > 0 && <span className="ml-3 text-amber-600">({overtimeEntries.length})</span>}
+          </h3>
+          {overtimeEntries.length === 0 ? (
+            <p className="text-sm text-[#bbb] tracking-wider">No overtime entries pending approval.</p>
+          ) : (
+            <div className="border border-[#ddd] bg-white overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-[#eee]">
+                    {['Employee', 'Date', 'Day', 'Login', 'Logout', 'OT Time', 'Extra Hours', 'Reason', 'Compensated By', ''].map(h => (
+                      <th key={h} className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f5f5f5]">
+                  {overtimeEntries.map(e => {
+                    const dow = e.date ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(e.date+'T00:00:00').getDay()] : '—'
+                    return (
+                      <tr key={e.id} className="hover:bg-[#fafafa]">
+                        <td className="px-4 py-3 text-xs text-[#1a1a1a]">{(e.users as any)?.name || '—'}</td>
+                        <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(e.date)}</td>
+                        <td className="px-4 py-3 text-xs text-[#888]">{dow}</td>
+                        <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.login_time)}</td>
+                        <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.logout_time)}</td>
+                        <td className="px-4 py-3 text-xs font-medium text-[#1a1a1a]">{minutesToHM(e.overtime_minutes)}</td>
+                        <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">
+                          {e.extra_hours_start && e.extra_hours_end
+                            ? `${fmtTime(e.extra_hours_start)} – ${fmtTime(e.extra_hours_end)}` : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-[#888] max-w-[120px]">{e.reason || '—'}</td>
+                        <td className="px-4 py-3 text-xs text-[#888] max-w-[120px]">{e.compensated_by || '—'}</td>
+                        <td className="px-4 py-3">
+                          {otRejectingId === e.id ? (
+                            <div className="flex gap-2 items-center">
+                              <input type="text" placeholder="Rejection reason (required)" value={otRejectReason}
+                                onChange={ev => setOtRejectReason(ev.target.value)}
+                                onKeyDown={ev => {
+                                  if (ev.key === 'Enter' && otRejectReason.trim()) rejectOvertime(e, otRejectReason)
+                                  if (ev.key === 'Escape') { setOtRejectingId(null); setOtRejectReason('') }
+                                }}
+                                autoFocus
+                                className="border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs focus:outline-none w-40" />
+                              <button
+                                onClick={() => rejectOvertime(e, otRejectReason)}
+                                disabled={!!otActingId || !otRejectReason.trim()}
+                                className="text-xs text-red-400 hover:text-red-600 cursor-pointer disabled:opacity-40">Confirm</button>
+                              <button onClick={() => { setOtRejectingId(null); setOtRejectReason('') }}
+                                className="text-xs text-[#aaa] cursor-pointer">✕</button>
+                            </div>
+                          ) : (
+                            <div className="flex gap-3">
+                              <button onClick={() => approveOvertime(e)} disabled={!!otActingId}
+                                className="px-3 py-1 border border-emerald-600 text-[9px] tracking-wider uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                                {otActingId === e.id ? '…' : 'Approve'}
+                              </button>
+                              <button onClick={() => { setOtRejectingId(e.id); setOtRejectReason('') }} disabled={!!otActingId}
+                                className="px-3 py-1 border border-red-400 text-[9px] tracking-wider uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                                Reject
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
         {/* Pending Leave Requests */}
         <section>
@@ -813,72 +891,6 @@ export default function AdminPage() {
               ))}
             </div>
           </div>
-        </section>
-
-        {/* Overtime Approvals */}
-        <section>
-          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">
-            Overtime Approvals
-            {overtimeEntries.length > 0 && <span className="ml-3 text-amber-600">({overtimeEntries.length})</span>}
-          </h3>
-          {overtimeEntries.length === 0 ? (
-            <p className="text-sm text-[#bbb] tracking-wider">No overtime entries pending approval.</p>
-          ) : (
-            <div className="border border-[#ddd] bg-white overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-[#eee]">
-                    {['Employee', 'Date', 'Login', 'Logout', 'OT Time', 'Extra Hours', 'Reason', 'Compensated By', ''].map(h => (
-                      <th key={h} className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#f5f5f5]">
-                  {overtimeEntries.map(e => (
-                    <tr key={e.id} className="hover:bg-[#fafafa]">
-                      <td className="px-4 py-3 text-xs text-[#1a1a1a]">{(e.users as any)?.name || '—'}</td>
-                      <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(e.date)}</td>
-                      <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.login_time)}</td>
-                      <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.logout_time)}</td>
-                      <td className="px-4 py-3 text-xs font-medium text-[#1a1a1a]">{minutesToHM(e.overtime_minutes)}</td>
-                      <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">
-                        {e.extra_hours_start && e.extra_hours_end
-                          ? `${fmtTime(e.extra_hours_start)} – ${fmtTime(e.extra_hours_end)}` : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-[#888] max-w-[120px]">{e.reason || '—'}</td>
-                      <td className="px-4 py-3 text-xs text-[#888] max-w-[120px]">{e.compensated_by || '—'}</td>
-                      <td className="px-4 py-3">
-                        {otRejectingId === e.id ? (
-                          <div className="flex gap-2 items-center">
-                            <input type="text" placeholder="Reason" value={otRejectReason}
-                              onChange={ev => setOtRejectReason(ev.target.value)}
-                              onKeyDown={ev => { if (ev.key === 'Enter') rejectOvertime(e, otRejectReason); if (ev.key === 'Escape') { setOtRejectingId(null); setOtRejectReason('') } }}
-                              autoFocus
-                              className="border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs focus:outline-none w-32" />
-                            <button onClick={() => rejectOvertime(e, otRejectReason)} disabled={!!otActingId}
-                              className="text-xs text-red-400 hover:text-red-600 cursor-pointer disabled:opacity-40">Confirm</button>
-                            <button onClick={() => { setOtRejectingId(null); setOtRejectReason('') }}
-                              className="text-xs text-[#aaa] cursor-pointer">✕</button>
-                          </div>
-                        ) : (
-                          <div className="flex gap-3">
-                            <button onClick={() => approveOvertime(e)} disabled={!!otActingId}
-                              className="px-3 py-1 border border-emerald-600 text-[9px] tracking-wider uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-40">
-                              {otActingId === e.id ? '…' : 'Approve'}
-                            </button>
-                            <button onClick={() => { setOtRejectingId(e.id); setOtRejectReason('') }} disabled={!!otActingId}
-                              className="px-3 py-1 border border-red-400 text-[9px] tracking-wider uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-40">
-                              Reject
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </section>
 
         {/* Review Manager */}

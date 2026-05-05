@@ -14,16 +14,22 @@ type BalanceItem = { remaining: number; taken: number; scheduled: number }
 type TeamPerson = { name: string; type: string; date_from: string; date_to: string }
 type ClockLog = { id: string; user_id: string; date: string; clock_in: string | null; clock_out: string | null; users?: { name: string } | null }
 
+function localDateStr() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
 function nowTime() {
   const n = new Date()
-  return n.toTimeString().slice(0, 5) // "HH:MM"
+  return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}:${String(n.getSeconds()).padStart(2,'0')}`
 }
 function fmtTime(t: string | null) {
   if (!t) return '—'
-  const [h, m] = t.split(':').map(Number)
+  const parts = t.split(':').map(Number)
+  const h = parts[0], m = parts[1]
   const ampm = h >= 12 ? 'PM' : 'AM'
   return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
 }
+function timeHHMM(t: string) { return t.slice(0, 5) }
 function minutesDiff(a: string, b: string) {
   const [ah, am] = a.split(':').map(Number)
   const [bh, bm] = b.split(':').map(Number)
@@ -73,36 +79,47 @@ export default function Dashboard() {
   const [wsAdding, setWsAdding] = useState(false)
   const [todayClock, setTodayClock] = useState<ClockLog | null>(null)
   const [clockAction, setClockAction] = useState(false)
+  const [clockError, setClockError] = useState('')
   const [allClockLogs, setAllClockLogs] = useState<ClockLog[]>([])
   const router = useRouter()
 
   async function loadClockData(uid: string, adminFlag: boolean) {
-    const todayStr = new Date().toISOString().split('T')[0]
-    const { data: myLog } = await supabaseAdmin
-      .from('clock_logs').select('*').eq('user_id', uid).eq('date', todayStr).maybeSingle()
-    setTodayClock(myLog ?? null)
+    const today = localDateStr()
+    const { data: myLogArr, error } = await supabaseAdmin
+      .from('clock_logs').select('*').eq('user_id', uid).eq('date', today).limit(1)
+    if (error) console.error('[Clock] loadClockData error:', error)
+    setTodayClock(myLogArr?.[0] ?? null)
     if (adminFlag) {
       const { data: allLogs } = await supabaseAdmin
-        .from('clock_logs').select('*, users(name)').eq('date', todayStr).order('clock_in', { ascending: true })
+        .from('clock_logs').select('*, users(name)').eq('date', today).order('clock_in', { ascending: true })
       setAllClockLogs(allLogs ?? [])
     }
   }
 
   async function clockIn(uid: string, adminFlag: boolean) {
     setClockAction(true)
-    const todayStr = new Date().toISOString().split('T')[0]
+    setClockError('')
+    const today = localDateStr()
     const t = nowTime()
+    const hhMM = timeHHMM(t)
+    console.log('[Clock] clockIn uid:', uid, 'date:', today, 'time:', t)
     const { data, error } = await supabaseAdmin.from('clock_logs')
-      .insert({ user_id: uid, date: todayStr, clock_in: t }).select().single()
-    if (!error && data) {
-      // auto late arrival if after 10:15
-      if (t > '10:15') {
-        const minLate = minutesDiff('10:00', t)
-        await supabaseAdmin.from('late_arrivals').upsert(
-          { user_id: uid, date: todayStr, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'pending' },
-          { onConflict: 'user_id,date' }
-        )
-      }
+      .insert({ user_id: uid, date: today, clock_in: t })
+      .select().limit(1)
+    console.log('[Clock] clockIn result:', { data, error })
+    if (error) {
+      setClockError(`Clock-in failed: ${error.message}`)
+      setClockAction(false)
+      return
+    }
+    // auto late arrival only if strictly after 10:15
+    if (hhMM > '10:15') {
+      const minLate = minutesDiff('10:00', hhMM)
+      const { error: laErr } = await supabaseAdmin.from('late_arrivals').upsert(
+        { user_id: uid, date: today, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'pending' },
+        { onConflict: 'user_id,date' }
+      )
+      if (laErr) console.error('[Clock] late_arrivals upsert error:', laErr)
     }
     await loadClockData(uid, adminFlag)
     setClockAction(false)
@@ -110,20 +127,24 @@ export default function Dashboard() {
 
   async function clockOut(uid: string, adminFlag: boolean) {
     setClockAction(true)
+    setClockError('')
+    const today = localDateStr()
     const t = nowTime()
-    const todayStr = new Date().toISOString().split('T')[0]
-    await supabaseAdmin.from('clock_logs').update({ clock_out: t }).eq('user_id', uid).eq('date', todayStr)
-    // if left before 18:00, update minutes_missed on late_arrivals if row exists
-    if (t < '18:00') {
-      const missed = minutesDiff(t, '18:00')
-      await supabaseAdmin.from('late_arrivals')
-        .update({ departure_time: t, minutes_missed: missed })
-        .eq('user_id', uid).eq('date', todayStr)
-    } else {
-      await supabaseAdmin.from('late_arrivals')
-        .update({ departure_time: t, minutes_missed: 0 })
-        .eq('user_id', uid).eq('date', todayStr)
+    const hhMM = timeHHMM(t)
+    console.log('[Clock] clockOut uid:', uid, 'date:', today, 'time:', t)
+    const { error } = await supabaseAdmin.from('clock_logs')
+      .update({ clock_out: t }).eq('user_id', uid).eq('date', today)
+    console.log('[Clock] clockOut result:', { error })
+    if (error) {
+      setClockError(`Clock-out failed: ${error.message}`)
+      setClockAction(false)
+      return
     }
+    // update minutes_missed on late_arrivals row if one exists for today
+    const missed = hhMM < '18:00' ? minutesDiff(hhMM, '18:00') : 0
+    await supabaseAdmin.from('late_arrivals')
+      .update({ departure_time: t, minutes_missed: missed })
+      .eq('user_id', uid).eq('date', today)
     await loadClockData(uid, adminFlag)
     setClockAction(false)
   }
@@ -268,8 +289,8 @@ export default function Dashboard() {
         <div className="mb-12">
           <div className="border border-[#ddd] bg-white px-8 py-5 flex items-center justify-between">
             <div>
-              <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-1">Today's Attendance</p>
-              <div className="flex items-center gap-6">
+              <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-2">Today's Attendance</p>
+              <div className="flex items-center gap-8">
                 <div>
                   <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock In</span>
                   <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_in ?? null)}</p>
@@ -278,13 +299,16 @@ export default function Dashboard() {
                   <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock Out</span>
                   <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_out ?? null)}</p>
                 </div>
-                {todayClock?.clock_in && !todayClock.clock_out && todayClock.clock_in > '10:15' && (
+                {todayClock?.clock_in && timeHHMM(todayClock.clock_in) > '10:15' && (
                   <div>
                     <span className="text-[9px] text-amber-600 uppercase tracking-wider">Late</span>
-                    <p className="text-sm font-light text-amber-600 mt-0.5">{minutesDiff('10:00', todayClock.clock_in)}m</p>
+                    <p className="text-sm font-light text-amber-600 mt-0.5">
+                      +{minutesDiff('10:00', timeHHMM(todayClock.clock_in))}m
+                    </p>
                   </div>
                 )}
               </div>
+              {clockError && <p className="text-xs text-red-400 mt-2">{clockError}</p>}
             </div>
             <div className="flex gap-3">
               <button
