@@ -7,19 +7,26 @@ import Nav from '../components/Nav'
 type Holiday = { id: string; name: string; date: string; type: string }
 
 const HOLIDAYS_2026 = [
-  { name: 'Republic Day',      date: '2026-01-26', type: 'national' },
-  { name: 'Holi',              date: '2026-03-04', type: 'national' },
-  { name: 'Good Friday',       date: '2026-04-03', type: 'national' },
-  { name: 'Ambedkar Jayanti',  date: '2026-04-14', type: 'national' },
-  { name: 'May Day',           date: '2026-05-01', type: 'national' },
-  { name: 'Bakri-Eid',         date: '2026-05-27', type: 'national' },
-  { name: 'Independence Day',  date: '2026-08-15', type: 'national' },
-  { name: 'Raksha Bandhan',    date: '2026-08-28', type: 'national' },
-  { name: 'Janmashtami',       date: '2026-09-04', type: 'national' },
-  { name: 'Gandhi Jayanti',    date: '2026-10-02', type: 'national' },
-  { name: 'Dussehra',          date: '2026-10-20', type: 'national' },
-  { name: 'Diwali',            date: '2026-11-08', type: 'national' },
-  { name: 'Christmas',         date: '2026-12-25', type: 'national' },
+  { name: 'Republic Day',       date: '2026-01-26', type: 'national' },
+  { name: 'Eid ul-Fitr',        date: '2026-03-31', type: 'national' },
+  { name: 'Holi',               date: '2026-03-25', type: 'national' },
+  { name: 'Good Friday',        date: '2026-04-03', type: 'national' },
+  { name: 'Ram Navami',         date: '2026-04-06', type: 'national' },
+  { name: 'Mahavir Jayanti',    date: '2026-04-10', type: 'national' },
+  { name: 'Dr. Ambedkar Jayanti', date: '2026-04-14', type: 'national' },
+  { name: 'Buddha Purnima',     date: '2026-05-12', type: 'national' },
+  { name: 'Eid ul-Adha',        date: '2026-06-07', type: 'national' },
+  { name: 'Muharram',           date: '2026-07-06', type: 'national' },
+  { name: 'Independence Day',   date: '2026-08-15', type: 'national' },
+  { name: 'Janmashtami',        date: '2026-08-16', type: 'national' },
+  { name: 'Ganesh Chaturthi',   date: '2026-08-25', type: 'national' },
+  { name: 'Gandhi Jayanti',     date: '2026-10-02', type: 'national' },
+  { name: 'Dussehra',           date: '2026-10-20', type: 'national' },
+  { name: 'Diwali',             date: '2026-11-08', type: 'national' },
+  { name: 'Govardhan Puja',     date: '2026-11-09', type: 'national' },
+  { name: 'Bhai Dooj',          date: '2026-11-10', type: 'national' },
+  { name: 'Guru Nanak Jayanti', date: '2026-11-25', type: 'national' },
+  { name: 'Christmas',          date: '2026-12-25', type: 'national' },
 ]
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -37,7 +44,10 @@ function isPast(d: string) {
 export default function HolidaysPage() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [holidays, setHolidays] = useState<Holiday[]>([])
+  const [activeYear, setActiveYear] = useState<2026 | 2027>(2026)
   const [loading, setLoading] = useState(true)
+  const [resetting, setResetting] = useState(false)
+  const [resetMsg, setResetMsg] = useState('')
 
   // Add form
   const [addForm, setAddForm] = useState({ name: '', date: '', type: 'national' })
@@ -71,9 +81,10 @@ export default function HolidaysPage() {
 
       const existing = await loadHolidays()
 
-      // Auto-populate 2026 holidays if table is empty
-      if (existing.length === 0) {
-        console.log('[Holidays] table empty — seeding 2026 Indian national holidays')
+      // Auto-populate 2026 holidays if none exist for 2026
+      const has2026 = (existing as Holiday[]).some(h => h.date.startsWith('2026'))
+      if (!has2026) {
+        console.log('[Holidays] no 2026 entries — seeding')
         const { error } = await supabaseAdmin.from('holidays').insert(HOLIDAYS_2026)
         if (error) console.error('[Holidays] seed error:', error)
         else await loadHolidays()
@@ -87,15 +98,29 @@ export default function HolidaysPage() {
     if (!addForm.name || !addForm.date) return
     setAddError('')
     setAddSaving(true)
-    console.log('[Holidays] addHoliday:', addForm)
     const { data, error } = await supabaseAdmin.from('holidays')
       .insert({ name: addForm.name, date: addForm.date, type: addForm.type })
       .select()
-    console.log('[Holidays] addHoliday result:', { data, error })
+    console.log('[Holidays] addHoliday:', { data, error })
     if (error) { setAddError(error.message); setAddSaving(false); return }
-    setAddForm({ name: '', date: '', type: 'national' })
+    setAddForm({ name: '', date: `${activeYear}-`, type: 'national' })
     await loadHolidays()
     setAddSaving(false)
+  }
+
+  async function resetTo2026Defaults() {
+    if (!confirm('This will delete all 2026 holidays and restore the default list. Continue?')) return
+    setResetting(true)
+    setResetMsg('')
+    const { error: delError } = await supabaseAdmin
+      .from('holidays').delete().like('date', '2026-%')
+    if (delError) { setResetMsg('Error: ' + delError.message); setResetting(false); return }
+    const { error: insError } = await supabaseAdmin.from('holidays').insert(HOLIDAYS_2026)
+    if (insError) { setResetMsg('Error: ' + insError.message); setResetting(false); return }
+    await loadHolidays()
+    setResetMsg('Reset to defaults.')
+    setResetting(false)
+    setTimeout(() => setResetMsg(''), 3000)
   }
 
   function startEdit(h: Holiday) {
@@ -122,6 +147,15 @@ export default function HolidaysPage() {
     await loadHolidays()
   }
 
+  const yearHolidays = holidays.filter(h => h.date.startsWith(String(activeYear)))
+
+  // When switching year tabs, pre-fill the add form date prefix
+  function switchYear(y: 2026 | 2027) {
+    setActiveYear(y)
+    setAddForm(f => ({ ...f, date: '' }))
+    setEditId(null)
+  }
+
   if (loading) return null
 
   return (
@@ -130,11 +164,30 @@ export default function HolidaysPage() {
 
       <div className="px-12 py-12 max-w-4xl mx-auto">
         <h2 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Holidays</h2>
-        <p className="text-2xl font-light tracking-wide text-[#1a1a1a] mb-10">Holiday Calendar 2026</p>
+        <div className="flex items-end justify-between mb-8">
+          <p className="text-2xl font-light tracking-wide text-[#1a1a1a]">Holiday Calendar</p>
+        </div>
+
+        {/* Year tabs */}
+        <div className="flex gap-0 mb-8 border-b border-[#ddd]">
+          {([2026, 2027] as const).map(y => (
+            <button
+              key={y}
+              onClick={() => switchYear(y)}
+              className={`px-6 py-2.5 text-xs tracking-[0.2em] uppercase transition-colors cursor-pointer border-b-2 -mb-px ${
+                activeYear === y
+                  ? 'border-[#1a1a1a] text-[#1a1a1a]'
+                  : 'border-transparent text-[#aaa] hover:text-[#1a1a1a]'
+              }`}
+            >
+              {y}
+            </button>
+          ))}
+        </div>
 
         {/* Admin: Add form */}
         {isAdmin && (
-          <div className="border border-[#ddd] bg-white p-6 mb-10">
+          <div className="border border-[#ddd] bg-white p-6 mb-6">
             <p className="text-xs tracking-[0.2em] uppercase text-[#888] mb-4">Add Holiday</p>
             <div className="flex gap-4 items-end flex-wrap">
               <div className="flex-1 min-w-[180px]">
@@ -146,6 +199,7 @@ export default function HolidaysPage() {
               <div>
                 <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Date</label>
                 <input type="date" value={addForm.date}
+                  min={`${activeYear}-01-01`} max={`${activeYear}-12-31`}
                   onChange={e => setAddForm({ ...addForm, date: e.target.value })}
                   className="border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
               </div>
@@ -166,9 +220,22 @@ export default function HolidaysPage() {
           </div>
         )}
 
+        {/* Admin 2026: Reset to defaults */}
+        {isAdmin && activeYear === 2026 && (
+          <div className="flex items-center gap-4 mb-8">
+            <button onClick={resetTo2026Defaults} disabled={resetting}
+              className="text-xs tracking-[0.15em] uppercase text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">
+              {resetting ? 'Resetting…' : 'Reset to 2026 defaults'}
+            </button>
+            {resetMsg && <span className="text-xs text-emerald-600">{resetMsg}</span>}
+          </div>
+        )}
+
         {/* Holiday Table */}
-        {holidays.length === 0 ? (
-          <p className="text-sm text-[#bbb] tracking-wider">No holidays added yet.</p>
+        {yearHolidays.length === 0 ? (
+          <p className="text-sm text-[#bbb] tracking-wider">
+            {activeYear === 2027 ? 'No holidays added for 2027 yet.' : 'No holidays added yet.'}
+          </p>
         ) : (
           <div className="border border-[#ddd] bg-white overflow-hidden">
             <table className="w-full">
@@ -182,9 +249,8 @@ export default function HolidaysPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f5f5f5]">
-                {holidays.map(h => (
+                {yearHolidays.map(h => (
                   editId === h.id ? (
-                    /* Inline edit row */
                     <tr key={h.id} className="bg-[#fafafa]">
                       <td className="px-4 py-3" colSpan={isAdmin ? 5 : 4}>
                         <div className="flex gap-3 items-center flex-wrap">
@@ -210,7 +276,6 @@ export default function HolidaysPage() {
                       </td>
                     </tr>
                   ) : (
-                    /* Normal row */
                     <tr key={h.id} className={`hover:bg-[#fafafa] ${isPast(h.date) ? 'opacity-50' : ''}`}>
                       <td className="px-6 py-4 text-xs text-[#1a1a1a]">{h.name}</td>
                       <td className="px-6 py-4 text-xs text-[#888]">{formatDate(h.date)}</td>
