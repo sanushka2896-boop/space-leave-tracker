@@ -93,21 +93,14 @@ export default function AdminPage() {
   const [aSaving, setASaving] = useState(false)
   const [aError, setAError] = useState('')
 
-  // Dynamic quota — employee selector + per-type editable rows
+  // Leave quota — 3 fixed types only
   const [qUserId, setQUserId] = useState('')
-  const [qBalancesEdit, setQBalancesEdit] = useState<Record<string, { allocated: string; balance: string }>>({})
+  const [qCasual, setQCasual] = useState('20')
+  const [qSick, setQSick] = useState('7')
+  const [qWfh, setQWfh] = useState('0')
   const [qSaving, setQSaving] = useState(false)
-  const [qSeedingAll, setQSeedingAll] = useState(false)
   const [qError, setQError] = useState('')
   const [qSuccess, setQSuccess] = useState('')
-
-  // Leave Type Management
-  const [ltForm, setLtForm] = useState({ key: '', label: '', default_days: '', requires_docs: false, sort_order: '99' })
-  const [ltSaving, setLtSaving] = useState(false)
-  const [ltError, setLtError] = useState('')
-  const [ltEditKey, setLtEditKey] = useState<string | null>(null)
-  const [ltEditForm, setLtEditForm] = useState({ label: '', default_days: '', requires_docs: false, sort_order: '0' })
-  const [ltEditSaving, setLtEditSaving] = useState(false)
 
   const [wsDate, setWsDate] = useState('')
   const [wsSaving, setWsSaving] = useState(false)
@@ -194,52 +187,29 @@ export default function AdminPage() {
     })
   }, [])
 
-  function buildQuotaEdit(uid: string, members: TeamMember[], lts: LeaveTypeDef[]) {
-    const member = members.find(m => m.id === uid)
-    const balMap: Record<string, { allocated: string; balance: string }> = {}
-    for (const lt of lts.filter(t => t.is_active)) {
-      const existing = member?.balances.find(b => b.leave_type === lt.key)
-      balMap[lt.key] = {
-        allocated: String(existing?.allocated ?? lt.default_days ?? 0),
-        balance: String(existing?.balance ?? lt.default_days ?? 0),
-      }
-    }
-    return balMap
-  }
-
-  async function autoAssignByDesignation() {
+  async function saveQuota() {
     if (!qUserId) return
-    const member = team.find(m => m.id === qUserId)
-    const role = member?.role ?? null
-    const wfh = getWfhAllocation(role)
-    const casualDays = leaveTypes.find(lt => lt.key === 'casual')?.default_days ?? 20
-    const sickDays = leaveTypes.find(lt => lt.key === 'sick')?.default_days ?? 7
-
-    const updated = { ...qBalancesEdit }
-    if ('casual' in updated) updated['casual'] = { allocated: String(casualDays), balance: String(casualDays) }
-    if ('sick' in updated) updated['sick'] = { allocated: String(sickDays), balance: String(sickDays) }
-    if (wfh > 0) {
-      updated['wfh'] = { allocated: String(wfh), balance: String(wfh) }
-    } else if ('wfh' in updated) {
-      updated['wfh'] = { allocated: '0', balance: '0' }
-    }
-    setQBalancesEdit(updated)
-
-    setQSaving(true)
     setQError('')
     setQSuccess('')
+    setQSaving(true)
     const year = new Date().getFullYear()
-    const rows = Object.entries(updated).map(([lt, vals]) => ({
-      user_id: qUserId,
-      leave_type: lt,
-      allocated: parseFloat(vals.allocated) || 0,
-      balance: parseFloat(vals.balance) || 0,
-      year,
-    }))
-    await supabaseAdmin.from('leave_balances').delete().eq('user_id', qUserId)
+    const member = team.find(m => m.id === qUserId)
+
+    const makeRow = (lt: string, newAlloc: number) => {
+      const ex = member?.balances.find(b => b.leave_type === lt)
+      const oldAlloc = ex?.allocated ?? newAlloc
+      const newBal = (ex?.balance ?? newAlloc) + (newAlloc - oldAlloc)
+      return { user_id: qUserId, leave_type: lt, allocated: newAlloc, balance: Math.max(newBal, 0), year }
+    }
+
+    const rows = [makeRow('casual', parseFloat(qCasual) || 0), makeRow('sick', parseFloat(qSick) || 0)]
+    const wfhVal = parseFloat(qWfh) || 0
+    if (wfhVal > 0) rows.push(makeRow('wfh', wfhVal))
+
+    await supabaseAdmin.from('leave_balances').delete().eq('user_id', qUserId).in('leave_type', ['casual', 'sick', 'wfh'])
     const { error } = await supabaseAdmin.from('leave_balances').insert(rows)
     if (error) { setQError(error.message); setQSaving(false); return }
-    setQSuccess('Auto-assigned and saved.')
+    setQSuccess('Saved.')
     await loadData()
     setQSaving(false)
   }
@@ -364,54 +334,6 @@ export default function AdminPage() {
     setASaving(false)
   }
 
-  async function saveAllQuota() {
-    if (!qUserId) return
-    setQError('')
-    setQSuccess('')
-    setQSaving(true)
-    const year = new Date().getFullYear()
-    const rows = Object.entries(qBalancesEdit).map(([lt, vals]) => ({
-      user_id: qUserId,
-      leave_type: lt,
-      allocated: parseFloat(vals.allocated) || 0,
-      balance: parseFloat(vals.balance) || 0,
-      year,
-    }))
-    await supabaseAdmin.from('leave_balances').delete().eq('user_id', qUserId)
-    const { error } = await supabaseAdmin.from('leave_balances').insert(rows)
-    if (error) { setQError(error.message); setQSaving(false); return }
-    setQSuccess('Quotas updated.')
-    await loadData()
-    setQSaving(false)
-  }
-
-  async function seedAllEmployees() {
-    setQSeedingAll(true)
-    setQError('')
-    setQSuccess('')
-    const year = new Date().getFullYear()
-    const casualDays = leaveTypes.find(lt => lt.key === 'casual')?.default_days ?? 20
-    const sickDays = leaveTypes.find(lt => lt.key === 'sick')?.default_days ?? 7
-
-    for (const member of team) {
-      const wfh = getWfhAllocation(member.role)
-      await supabaseAdmin.from('leave_balances').delete()
-        .eq('user_id', member.id).in('leave_type', ['casual', 'sick', 'wfh'])
-      const rows: { user_id: string; leave_type: string; allocated: number; balance: number; year: number }[] = [
-        { user_id: member.id, leave_type: 'casual', allocated: casualDays, balance: casualDays, year },
-        { user_id: member.id, leave_type: 'sick', allocated: sickDays, balance: sickDays, year },
-      ]
-      if (wfh > 0) {
-        rows.push({ user_id: member.id, leave_type: 'wfh', allocated: wfh, balance: wfh, year })
-      }
-      await supabaseAdmin.from('leave_balances').insert(rows)
-    }
-
-    setQSuccess(`Seeded ${team.length} employees with casual, sick, and WFH quotas.`)
-    await loadData()
-    setQSeedingAll(false)
-  }
-
   async function addWorkingSaturday() {
     if (!wsDate) return
     const d = new Date(wsDate + 'T00:00:00')
@@ -428,52 +350,6 @@ export default function AdminPage() {
   async function removeWorkingSaturday(id: string) {
     await supabaseAdmin.from('working_saturdays').delete().eq('id', id)
     await loadData()
-  }
-
-  async function addLeaveType() {
-    if (!ltForm.key || !ltForm.label) return
-    setLtError('')
-    setLtSaving(true)
-    const { error } = await supabaseAdmin.from('leave_types').insert({
-      key: ltForm.key.toLowerCase().replace(/\s+/g, '_'),
-      label: ltForm.label,
-      default_days: ltForm.default_days ? parseFloat(ltForm.default_days) : null,
-      requires_docs: ltForm.requires_docs,
-      is_active: true,
-      sort_order: parseInt(ltForm.sort_order) || 99,
-    })
-    if (error) { setLtError(error.message); setLtSaving(false); return }
-    setLtForm({ key: '', label: '', default_days: '', requires_docs: false, sort_order: '99' })
-    await loadData()
-    setLtSaving(false)
-  }
-
-  async function toggleLeaveType(key: string, is_active: boolean) {
-    await supabaseAdmin.from('leave_types').update({ is_active }).eq('key', key)
-    await loadData()
-  }
-
-  function startEditLeaveType(lt: LeaveTypeDef) {
-    setLtEditKey(lt.key)
-    setLtEditForm({
-      label: lt.label,
-      default_days: lt.default_days != null ? String(lt.default_days) : '',
-      requires_docs: lt.requires_docs,
-      sort_order: String(lt.sort_order),
-    })
-  }
-
-  async function saveLeaveTypeEdit(key: string) {
-    setLtEditSaving(true)
-    await supabaseAdmin.from('leave_types').update({
-      label: ltEditForm.label,
-      default_days: ltEditForm.default_days ? parseFloat(ltEditForm.default_days) : null,
-      requires_docs: ltEditForm.requires_docs,
-      sort_order: parseInt(ltEditForm.sort_order) || 0,
-    }).eq('key', key)
-    setLtEditKey(null)
-    await loadData()
-    setLtEditSaving(false)
   }
 
   function formatDate(d: string) {
@@ -799,8 +675,8 @@ export default function AdminPage() {
         {/* Leave Quota Assignment */}
         <section>
           <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Leave Quota Assignment</h3>
-          <p className="text-xs text-[#bbb] tracking-wider mb-6">Set allocated and remaining balances per leave type for each employee.</p>
-          <div className="border border-[#ddd] bg-white p-6 max-w-2xl space-y-5">
+          <p className="text-xs text-[#bbb] tracking-wider mb-6">Set annual allocation per employee. Remaining adjusts proportionally to any change in allocated.</p>
+          <div className="border border-[#ddd] bg-white p-6 max-w-xl space-y-5">
             <div>
               <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Employee</label>
               <select
@@ -810,93 +686,78 @@ export default function AdminPage() {
                   setQUserId(uid)
                   setQError('')
                   setQSuccess('')
-                  if (uid) setQBalancesEdit(buildQuotaEdit(uid, team, leaveTypes))
-                  else setQBalancesEdit({})
+                  if (uid) {
+                    const m = team.find(x => x.id === uid)
+                    const wfh = getWfhAllocation(m?.role)
+                    setQCasual(String(m?.balances.find(b => b.leave_type === 'casual')?.allocated ?? 20))
+                    setQSick(String(m?.balances.find(b => b.leave_type === 'sick')?.allocated ?? 7))
+                    setQWfh(String(m?.balances.find(b => b.leave_type === 'wfh')?.allocated ?? wfh))
+                  }
                 }}
                 className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
               >
                 <option value="">Select employee</option>
-                {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email} {m.role ? `— ${m.role}` : ''}</option>)}
+                {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email}{m.role ? ` — ${m.role}` : ''}</option>)}
               </select>
-              {qUserId && team.find(m => m.id === qUserId)?.role && (
-                <p className="text-[10px] text-[#aaa] mt-1 tracking-wider">
-                  Role: {team.find(m => m.id === qUserId)?.role}
-                  {' · WFH eligible: '}{getWfhAllocation(team.find(m => m.id === qUserId)?.role)} days
-                </p>
-              )}
             </div>
 
-            {qUserId && leaveTypes.filter(lt => lt.is_active).length > 0 && (
-              <div className="border border-[#eee]">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-[#eee] bg-[#fafafa]">
-                      <th className="px-4 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">Leave Type</th>
-                      <th className="px-4 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">Allocated</th>
-                      <th className="px-4 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">Remaining</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#f5f5f5]">
-                    {leaveTypes.filter(lt => lt.is_active).map(lt => (
-                      <tr key={lt.key}>
-                        <td className="px-4 py-2 text-xs text-[#1a1a1a]">{lt.label}</td>
-                        <td className="px-4 py-2">
-                          <input
-                            type="number"
-                            step="0.5"
-                            value={qBalancesEdit[lt.key]?.allocated ?? ''}
-                            onChange={e => setQBalancesEdit(prev => ({
-                              ...prev,
-                              [lt.key]: { ...prev[lt.key], allocated: e.target.value },
-                            }))}
-                            className="w-20 border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none"
-                          />
-                        </td>
-                        <td className="px-4 py-2">
-                          <input
-                            type="number"
-                            step="0.5"
-                            value={qBalancesEdit[lt.key]?.balance ?? ''}
-                            onChange={e => setQBalancesEdit(prev => ({
-                              ...prev,
-                              [lt.key]: { ...prev[lt.key], balance: e.target.value },
-                            }))}
-                            className="w-20 border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none"
-                          />
-                        </td>
+            {qUserId && (() => {
+              const member = team.find(m => m.id === qUserId)
+              const isJunior = member?.role?.toLowerCase().includes('junior') ?? false
+              const rows: { key: string; label: string; val: string; set: (v: string) => void; disabled?: boolean }[] = [
+                { key: 'casual', label: 'Casual Leave', val: qCasual, set: setQCasual },
+                { key: 'sick', label: 'Sick Leave', val: qSick, set: setQSick },
+                { key: 'wfh', label: 'WFH Days', val: qWfh, set: setQWfh, disabled: isJunior },
+              ]
+              return (
+                <div className="border border-[#eee]">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-[#eee] bg-[#fafafa]">
+                        {['Leave Type', 'Allocated', 'Remaining'].map(h => (
+                          <th key={h} className="px-4 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                    </thead>
+                    <tbody className="divide-y divide-[#f5f5f5]">
+                      {rows.map(({ key, label, val, set, disabled }) => {
+                        const ex = member?.balances.find(b => b.leave_type === key)
+                        const remaining = disabled ? null
+                          : ex ? ex.balance + ((parseFloat(val) || 0) - ex.allocated)
+                          : (parseFloat(val) || 0)
+                        return (
+                          <tr key={key}>
+                            <td className="px-4 py-2 text-xs text-[#1a1a1a]">{label}</td>
+                            <td className="px-4 py-2">
+                              <input
+                                type="number" min="0" step="1"
+                                value={disabled ? '0' : val}
+                                disabled={disabled}
+                                onChange={e => set(e.target.value)}
+                                className="w-20 border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
+                              />
+                            </td>
+                            <td className="px-4 py-2 text-xs text-[#888]">
+                              {disabled ? <span className="text-[#ccc]">—</span> : remaining}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            })()}
 
             {qError && <p className="text-xs text-red-400">{qError}</p>}
             {qSuccess && <p className="text-xs text-emerald-600">{qSuccess}</p>}
-            <div className="flex gap-3">
-              <button
-                onClick={autoAssignByDesignation}
-                disabled={qSaving || !qUserId}
-                className="flex-1 py-2 border border-[#888] text-xs tracking-[0.25em] uppercase text-[#888] hover:border-[#1a1a1a] hover:text-[#1a1a1a] transition-all cursor-pointer disabled:opacity-40"
-              >
-                {qSaving ? 'Saving…' : 'Auto-assign by Designation'}
-              </button>
-              <button
-                onClick={saveAllQuota}
-                disabled={qSaving || !qUserId}
-                className="flex-1 py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
-              >
-                {qSaving ? 'Saving…' : 'Save Quotas'}
-              </button>
-            </div>
             <button
-              onClick={seedAllEmployees}
-              disabled={qSeedingAll || team.length === 0}
-              className="w-full py-2 border border-emerald-600 text-xs tracking-[0.25em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-40"
+              onClick={saveQuota}
+              disabled={qSaving || !qUserId}
+              className="w-full py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
             >
-              {qSeedingAll ? 'Seeding…' : `Seed All Employees (${team.length})`}
+              {qSaving ? 'Saving…' : 'Save Quotas'}
             </button>
-            <p className="text-[10px] text-[#bbb] tracking-wider">Auto-assign populates and saves Casual/Sick/WFH for one employee. Seed All does casual, sick, and WFH for every employee at once — use once during setup. Maternity, Miscarriage, and Sabbatical must be assigned manually.</p>
           </div>
         </section>
 
@@ -970,135 +831,14 @@ export default function AdminPage() {
           </div>
         </section>
 
-        {/* Leave Type Definitions */}
+        {/* Leave Types */}
         <section>
-          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Leave Type Definitions</h3>
-          <p className="text-xs text-[#bbb] tracking-wider mb-6">Add or edit leave types. New types appear automatically in the apply form and quota editor.</p>
-          <div className="grid grid-cols-2 gap-8">
-            {/* Add form */}
-            <div className="border border-[#ddd] bg-white p-6 space-y-3">
-              <p className="text-xs tracking-[0.2em] uppercase text-[#888]">Add Leave Type</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Key (unique ID)</label>
-                  <input type="text" placeholder="e.g. paternity" value={ltForm.key}
-                    onChange={e => setLtForm({ ...ltForm, key: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                </div>
-                <div>
-                  <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Label</label>
-                  <input type="text" placeholder="e.g. Paternity Leave" value={ltForm.label}
-                    onChange={e => setLtForm({ ...ltForm, label: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                </div>
-                <div>
-                  <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Default Days (blank = custom)</label>
-                  <input type="number" min="0" step="1" placeholder="e.g. 10" value={ltForm.default_days}
-                    onChange={e => setLtForm({ ...ltForm, default_days: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                </div>
-                <div>
-                  <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Sort Order</label>
-                  <input type="number" min="0" value={ltForm.sort_order}
-                    onChange={e => setLtForm({ ...ltForm, sort_order: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                </div>
-              </div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={ltForm.requires_docs}
-                  onChange={e => setLtForm({ ...ltForm, requires_docs: e.target.checked })}
-                  className="w-4 h-4 accent-[#1a1a1a]" />
-                <span className="text-xs text-[#888]">Requires medical documents</span>
-              </label>
-              {ltError && <p className="text-xs text-red-400">{ltError}</p>}
-              <button
-                onClick={addLeaveType}
-                disabled={ltSaving || !ltForm.key || !ltForm.label}
-                className="w-full py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
-              >
-                {ltSaving ? 'Adding…' : 'Add Type'}
-              </button>
-            </div>
-
-            {/* Leave types table */}
-            <div className="border border-[#ddd] bg-white overflow-y-auto max-h-[420px]">
-              {leaveTypes.length === 0 ? (
-                <p className="p-6 text-xs text-[#bbb] tracking-wider">No leave types defined.</p>
-              ) : leaveTypes.map(lt => (
-                <div key={lt.key} className="border-b border-[#eee] last:border-0">
-                  {ltEditKey === lt.key ? (
-                    <div className="px-5 py-3 space-y-2">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Label</label>
-                          <input type="text" value={ltEditForm.label}
-                            onChange={e => setLtEditForm({ ...ltEditForm, label: e.target.value })}
-                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none" />
-                        </div>
-                        <div>
-                          <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Default Days</label>
-                          <input type="number" min="0" step="1" value={ltEditForm.default_days}
-                            onChange={e => setLtEditForm({ ...ltEditForm, default_days: e.target.value })}
-                            placeholder="blank = custom"
-                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none" />
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input type="checkbox" checked={ltEditForm.requires_docs}
-                            onChange={e => setLtEditForm({ ...ltEditForm, requires_docs: e.target.checked })}
-                            className="w-3.5 h-3.5 accent-[#1a1a1a]" />
-                          <span className="text-[10px] text-[#888]">Requires docs</span>
-                        </label>
-                        <div className="flex items-center gap-1">
-                          <span className="text-[10px] text-[#aaa]">Order:</span>
-                          <input type="number" min="0" value={ltEditForm.sort_order}
-                            onChange={e => setLtEditForm({ ...ltEditForm, sort_order: e.target.value })}
-                            className="w-14 border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none" />
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button onClick={() => saveLeaveTypeEdit(lt.key)} disabled={ltEditSaving}
-                          className="px-4 py-1 border border-[#1a1a1a] text-[10px] tracking-wider uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">
-                          {ltEditSaving ? '…' : 'Save'}
-                        </button>
-                        <button onClick={() => setLtEditKey(null)}
-                          className="px-4 py-1 border border-[#ddd] text-[10px] uppercase text-[#888] cursor-pointer">
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="px-5 py-3 flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <p className={`text-xs ${lt.is_active ? 'text-[#1a1a1a]' : 'text-[#bbb] line-through'}`}>{lt.label}</p>
-                          {lt.requires_docs && (
-                            <span className="text-[9px] bg-amber-50 text-amber-600 px-1.5 py-0.5 tracking-wider uppercase">Docs</span>
-                          )}
-                        </div>
-                        <p className="text-[10px] text-[#aaa] mt-0.5">
-                          {lt.key} · {lt.default_days != null ? `${lt.default_days}d` : 'custom'} · order {lt.sort_order}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0 ml-3">
-                        <button onClick={() => startEditLeaveType(lt)}
-                          className="text-[10px] text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => toggleLeaveType(lt.key, !lt.is_active)}
-                          className={`text-[10px] transition-colors cursor-pointer ${lt.is_active ? 'text-[#aaa] hover:text-red-500' : 'text-emerald-500 hover:text-emerald-700'}`}
-                        >
-                          {lt.is_active ? 'Deactivate' : 'Activate'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
+          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-4">Leave Types</h3>
+          <p className="text-xs text-[#888] leading-relaxed tracking-wider">
+            Casual Leave: 20 days &nbsp;·&nbsp; Sick Leave: 7 days &nbsp;·&nbsp; WFH: 0 (Junior) / 12 (Mid) / 20 (Senior+)
+            <br />
+            Maternity: 8 weeks &nbsp;·&nbsp; Miscarriage: 6 weeks &nbsp;·&nbsp; Sabbatical: custom — assign manually via quota editor
+          </p>
         </section>
 
         {/* Holiday Manager */}
