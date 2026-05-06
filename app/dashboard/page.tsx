@@ -14,20 +14,16 @@ type BalanceItem = { remaining: number; taken: number; scheduled: number }
 type TeamPerson = { name: string; type: string; date_from: string; date_to: string }
 type ClockLog = { id: string; user_id: string; date: string; clock_in: string | null; clock_out: string | null; users?: { name: string } | null }
 
-/** Returns current date and time in Asia/Kolkata (IST) */
+/** Returns current IST date (YYYY-MM-DD) and time (HH:MM) as plain text */
 function getISTNow(): { date: string; time: string } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  }).formatToParts(new Date())
-  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00'
-  const h = get('hour') === '24' ? '00' : get('hour')
-  return {
-    date: `${get('year')}-${get('month')}-${get('day')}`,
-    time: `${h}:${get('minute')}:${get('second')}`,
-  }
+  const now = new Date()
+  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+  const y = ist.getFullYear()
+  const mo = String(ist.getMonth() + 1).padStart(2, '0')
+  const d = String(ist.getDate()).padStart(2, '0')
+  const h = String(ist.getHours()).padStart(2, '0')
+  const mi = String(ist.getMinutes()).padStart(2, '0')
+  return { date: `${y}-${mo}-${d}`, time: `${h}:${mi}` }
 }
 function fmtTime(t: string | null) {
   if (!t) return '—'
@@ -107,7 +103,6 @@ export default function Dashboard() {
     setClockAction(true)
     setClockError('')
     const { date: today, time: t } = getISTNow()
-    const hm = hhMM(t)
     console.log('[Clock] clockIn IST — uid:', uid, 'date:', today, 'time:', t)
     const { data, error } = await supabaseAdmin.from('clock_logs')
       .insert({ user_id: uid, date: today, clock_in: t })
@@ -118,9 +113,8 @@ export default function Dashboard() {
       setClockAction(false)
       return
     }
-    // auto late arrival only if strictly after 10:15 IST
-    if (hm > '10:15') {
-      const minLate = minutesDiff('10:00', hm)
+    if (t > '10:15') {
+      const minLate = minutesDiff('10:00', t)
       const { error: laErr } = await supabaseAdmin.from('late_arrivals').upsert(
         { user_id: uid, date: today, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'Pending', approved: false },
         { onConflict: 'user_id,date' }
@@ -135,7 +129,6 @@ export default function Dashboard() {
     setClockAction(true)
     setClockError('')
     const { date: today, time: t } = getISTNow()
-    const hm = hhMM(t)
     console.log('[Clock] clockOut IST — uid:', uid, 'date:', today, 'time:', t)
     const { error } = await supabaseAdmin.from('clock_logs')
       .update({ clock_out: t }).eq('user_id', uid).eq('date', today)
@@ -145,8 +138,7 @@ export default function Dashboard() {
       setClockAction(false)
       return
     }
-    // update departure_time + minutes_missed on late_arrivals row if one exists today
-    const missed = hm < '18:00' ? minutesDiff(hm, '18:00') : 0
+    const missed = t < '18:00' ? minutesDiff(t, '18:00') : 0
     await supabaseAdmin.from('late_arrivals')
       .update({ departure_time: t, minutes_missed: missed })
       .eq('user_id', uid).eq('date', today)

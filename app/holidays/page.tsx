@@ -6,29 +6,6 @@ import Nav from '../components/Nav'
 
 type Holiday = { id: string; name: string; date: string; type: string }
 
-const HOLIDAYS_2026 = [
-  { name: 'Republic Day',       date: '2026-01-26', type: 'national' },
-  { name: 'Eid ul-Fitr',        date: '2026-03-31', type: 'national' },
-  { name: 'Holi',               date: '2026-03-25', type: 'national' },
-  { name: 'Good Friday',        date: '2026-04-03', type: 'national' },
-  { name: 'Ram Navami',         date: '2026-04-06', type: 'national' },
-  { name: 'Mahavir Jayanti',    date: '2026-04-10', type: 'national' },
-  { name: 'Dr. Ambedkar Jayanti', date: '2026-04-14', type: 'national' },
-  { name: 'Buddha Purnima',     date: '2026-05-12', type: 'national' },
-  { name: 'Eid ul-Adha',        date: '2026-06-07', type: 'national' },
-  { name: 'Muharram',           date: '2026-07-06', type: 'national' },
-  { name: 'Independence Day',   date: '2026-08-15', type: 'national' },
-  { name: 'Janmashtami',        date: '2026-08-16', type: 'national' },
-  { name: 'Ganesh Chaturthi',   date: '2026-08-25', type: 'national' },
-  { name: 'Gandhi Jayanti',     date: '2026-10-02', type: 'national' },
-  { name: 'Dussehra',           date: '2026-10-20', type: 'national' },
-  { name: 'Diwali',             date: '2026-11-08', type: 'national' },
-  { name: 'Govardhan Puja',     date: '2026-11-09', type: 'national' },
-  { name: 'Bhai Dooj',          date: '2026-11-10', type: 'national' },
-  { name: 'Guru Nanak Jayanti', date: '2026-11-25', type: 'national' },
-  { name: 'Christmas',          date: '2026-12-25', type: 'national' },
-]
-
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 function formatDate(d: string) {
@@ -46,8 +23,6 @@ export default function HolidaysPage() {
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [activeYear, setActiveYear] = useState<2026 | 2027>(2026)
   const [loading, setLoading] = useState(true)
-  const [resetting, setResetting] = useState(false)
-  const [resetMsg, setResetMsg] = useState('')
 
   // Add form
   const [addForm, setAddForm] = useState({ name: '', date: '', type: 'national' })
@@ -78,18 +53,7 @@ export default function HolidaysPage() {
       if (!dbUser) { setLoading(false); return }
 
       setIsAdmin(dbUser.is_admin === true)
-
-      const existing = await loadHolidays()
-
-      // Auto-populate 2026 holidays if none exist for 2026
-      const has2026 = (existing as Holiday[]).some(h => h.date.startsWith('2026'))
-      if (!has2026) {
-        console.log('[Holidays] no 2026 entries — seeding')
-        const { error } = await supabaseAdmin.from('holidays').insert(HOLIDAYS_2026)
-        if (error) console.error('[Holidays] seed error:', error)
-        else await loadHolidays()
-      }
-
+      await loadHolidays()
       setLoading(false)
     })
   }, [])
@@ -106,21 +70,6 @@ export default function HolidaysPage() {
     setAddForm({ name: '', date: `${activeYear}-`, type: 'national' })
     await loadHolidays()
     setAddSaving(false)
-  }
-
-  async function resetTo2026Defaults() {
-    if (!confirm('This will delete all 2026 holidays and restore the default list. Continue?')) return
-    setResetting(true)
-    setResetMsg('')
-    const { error: delError } = await supabaseAdmin
-      .from('holidays').delete().like('date', '2026-%')
-    if (delError) { setResetMsg('Error: ' + delError.message); setResetting(false); return }
-    const { error: insError } = await supabaseAdmin.from('holidays').insert(HOLIDAYS_2026)
-    if (insError) { setResetMsg('Error: ' + insError.message); setResetting(false); return }
-    await loadHolidays()
-    setResetMsg('Reset to defaults.')
-    setResetting(false)
-    setTimeout(() => setResetMsg(''), 3000)
   }
 
   function startEdit(h: Holiday) {
@@ -217,17 +166,6 @@ export default function HolidaysPage() {
               </button>
             </div>
             {addError && <p className="text-xs text-red-400 mt-3">{addError}</p>}
-          </div>
-        )}
-
-        {/* Admin 2026: Reset to defaults */}
-        {isAdmin && activeYear === 2026 && (
-          <div className="flex items-center gap-4 mb-8">
-            <button onClick={resetTo2026Defaults} disabled={resetting}
-              className="text-xs tracking-[0.15em] uppercase text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">
-              {resetting ? 'Resetting…' : 'Reset to 2026 defaults'}
-            </button>
-            {resetMsg && <span className="text-xs text-emerald-600">{resetMsg}</span>}
           </div>
         )}
 
