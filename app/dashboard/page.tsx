@@ -4,17 +4,18 @@ import { supabase, supabaseAdmin } from '../lib/supabase'
 import { useRouter } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import Nav from '../components/Nav'
+import { buildInitialBalances } from '../lib/leaveTypes'
+import type { LeaveTypeDef } from '../lib/leaveTypes'
 
 type Leave = {
   id: string; type: string; date_from: string; date_to: string
   value: number; reason: string; status: string
 }
 type EditState = { type: string; date_from: string; date_to: string; value: string; reason: string }
-type BalanceItem = { remaining: number; taken: number; scheduled: number }
+type BalanceItem = { key: string; label: string; allocated: number; balance: number; taken: number; scheduled: number }
 type TeamPerson = { name: string; type: string; date_from: string; date_to: string }
 type ClockLog = { id: string; user_id: string; date: string; clock_in_time: string | null; users?: { name: string } | null }
 
-/** Returns current IST date (YYYY-MM-DD) and time (HH:MM) as plain text */
 function getISTNow(): { date: string; time: string } {
   const now = new Date()
   const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
@@ -29,10 +30,8 @@ function fmtTime(t: string | null) {
   if (!t) return '—'
   const parts = t.split(':').map(Number)
   const h = parts[0], m = parts[1]
-  const ampm = h >= 12 ? 'PM' : 'AM'
-  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`
 }
-function hhMM(t: string) { return t.slice(0, 5) }
 function minutesDiff(a: string, b: string) {
   const [ah, am] = a.split(':').map(Number)
   const [bh, bm] = b.split(':').map(Number)
@@ -47,11 +46,9 @@ const STATUS_STYLES: Record<string, string> = {
 }
 
 function toDateStr(d: Date) { return d.toISOString().split('T')[0] }
-
 function fmt(d: string) {
   return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 }
-
 function daysUntil(d: string) {
   const diff = Math.ceil(
     (new Date(d + 'T00:00:00').getTime() - new Date(new Date().toDateString()).getTime()) / 86400000
@@ -66,11 +63,7 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [userId, setUserId] = useState('')
-  const [balanceData, setBalanceData] = useState<{ sick: BalanceItem; earned: BalanceItem; wfh: BalanceItem }>({
-    sick: { remaining: 12, taken: 0, scheduled: 0 },
-    earned: { remaining: 15, taken: 0, scheduled: 0 },
-    wfh: { remaining: 24, taken: 0, scheduled: 0 },
-  })
+  const [balances, setBalances] = useState<BalanceItem[]>([])
   const [myLeaves, setMyLeaves] = useState<Leave[]>([])
   const [teamAvail, setTeamAvail] = useState<{ today: TeamPerson[]; tomorrow: TeamPerson[]; nextWeek: TeamPerson[] }>({ today: [], tomorrow: [], nextWeek: [] })
   const [holidays, setHolidays] = useState<{ id: string; name: string; date: string }[]>([])
@@ -88,9 +81,8 @@ export default function Dashboard() {
 
   async function loadClockData(uid: string, adminFlag: boolean) {
     const { date: today } = getISTNow()
-    const { data: myLogArr, error } = await supabaseAdmin
+    const { data: myLogArr } = await supabaseAdmin
       .from('clock_logs').select('*').eq('user_id', uid).eq('date', today).limit(1)
-    if (error) console.error('[Clock] loadClockData error:', error)
     setTodayClock(myLogArr?.[0] ?? null)
     if (adminFlag) {
       const { data: allLogs } = await supabaseAdmin
@@ -101,41 +93,27 @@ export default function Dashboard() {
 
   async function deleteClockIn(uid: string, adminFlag: boolean) {
     if (!todayClock) return
-    setClockAction(true)
-    setClockError('')
+    setClockAction(true); setClockError('')
     const { error } = await supabaseAdmin.from('clock_logs').delete().eq('id', todayClock.id)
-    if (error) {
-      setClockError(`Delete failed: ${error.message}`)
-      setClockAction(false)
-      return
-    }
+    if (error) { setClockError(`Delete failed: ${error.message}`); setClockAction(false); return }
     await loadClockData(uid, adminFlag)
     setClockAction(false)
   }
 
   async function clockIn(uid: string, adminFlag: boolean) {
-    setClockAction(true)
-    setClockError('')
+    setClockAction(true); setClockError('')
     const { date: today, time: t } = getISTNow()
-    console.log('[Clock] clockIn IST — uid:', uid, 'date:', today, 'time:', t)
     const { data, error } = await supabaseAdmin.from('clock_logs')
-      .insert({ user_id: uid, date: today, clock_in_time: t })
-      .select().limit(1)
-    console.log('[Clock] clockIn result:', { data, error })
-    if (error) {
-      setClockError(`Clock-in failed: ${error.message}`)
-      setClockAction(false)
-      return
-    }
+      .insert({ user_id: uid, date: today, clock_in_time: t }).select().limit(1)
+    if (error) { setClockError(`Clock-in failed: ${error.message}`); setClockAction(false); return }
     if (t > '10:15') {
       const minLate = minutesDiff('10:00', t)
       const { data: existing } = await supabaseAdmin
         .from('late_arrivals').select('id').eq('user_id', uid).eq('date', today).maybeSingle()
       if (!existing) {
-        const { error: laErr } = await supabaseAdmin.from('late_arrivals').insert(
+        await supabaseAdmin.from('late_arrivals').insert(
           { user_id: uid, date: today, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'Pending', approved: false }
         )
-        if (laErr) console.error('[Clock] late_arrivals insert error:', laErr)
       }
     }
     await loadClockData(uid, adminFlag)
@@ -143,24 +121,26 @@ export default function Dashboard() {
   }
 
   async function loadData(uid: string) {
+    const todayStr = getISTNow().date
     const today = new Date()
-    const todayStr = getISTNow().date // IST date
     const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1)
-    const tomorrowStr = toDateStr(tomorrow)
     const nwStart = new Date(today); nwStart.setDate(today.getDate() + 7)
     const nwEnd = new Date(today); nwEnd.setDate(today.getDate() + 13)
+    const tomorrowStr = toDateStr(tomorrow)
     const nwStartStr = toDateStr(nwStart)
     const nwEndStr = toDateStr(nwEnd)
 
     const [
-      { data: bal },
+      { data: balRows },
+      { data: ltDefs },
       { data: allMyLeaves },
       { data: teamLeavesRaw },
       { data: holidayRows },
       { data: wsRows },
       { data: myWsRows },
     ] = await Promise.all([
-      supabaseAdmin.from('leave_balance').select('*').eq('user_id', uid).single(),
+      supabaseAdmin.from('leave_balances').select('leave_type, allocated, balance').eq('user_id', uid),
+      supabaseAdmin.from('leave_types').select('key, label, sort_order').eq('is_active', true).order('sort_order'),
       supabaseAdmin.from('leaves').select('*').eq('user_id', uid).in('status', ['approved', 'pending']).order('date_from', { ascending: true }),
       supabaseAdmin.from('leaves').select('date_from, date_to, type, users(name)').neq('user_id', uid).eq('status', 'approved').lte('date_from', nwEndStr).gte('date_to', todayStr),
       supabaseAdmin.from('holidays').select('id, name, date').gte('date', todayStr).order('date', { ascending: true }).limit(3),
@@ -168,18 +148,27 @@ export default function Dashboard() {
       supabaseAdmin.from('working_saturdays').select('id, date').eq('user_id', uid).order('date', { ascending: false }).limit(10),
     ])
 
-    const b = bal ?? { sick_leaves: 12, earned_leaves: 15, wfh_days: 24 }
+    const typeLabelMap: Record<string, { label: string; sort: number }> = {}
+    for (const lt of ltDefs ?? []) typeLabelMap[lt.key] = { label: lt.label, sort: lt.sort_order }
+
     const leaves = allMyLeaves ?? []
     const pastApproved = leaves.filter((l: any) => l.status === 'approved' && l.date_to < todayStr)
     const futureApproved = leaves.filter((l: any) => l.status === 'approved' && l.date_from >= todayStr)
-    const sum = (arr: any[], type: string) => arr.filter(l => l.type === type).reduce((s: number, l: any) => s + l.value, 0)
+    const sumByType = (arr: any[], type: string) => arr.filter(l => l.type === type).reduce((s: number, l: any) => s + l.value, 0)
 
-    setBalanceData({
-      sick:   { remaining: b.sick_leaves,   taken: sum(pastApproved, 'sick'),   scheduled: sum(futureApproved, 'sick') },
-      earned: { remaining: b.earned_leaves, taken: sum(pastApproved, 'earned'), scheduled: sum(futureApproved, 'earned') },
-      wfh:    { remaining: b.wfh_days,      taken: sum(pastApproved, 'wfh'),    scheduled: sum(futureApproved, 'wfh') },
-    })
+    const balanceItems: BalanceItem[] = (balRows ?? [])
+      .filter((r: any) => r.allocated > 0 || Math.abs(r.balance) > 0)
+      .sort((a: any, b: any) => (typeLabelMap[a.leave_type]?.sort ?? 99) - (typeLabelMap[b.leave_type]?.sort ?? 99))
+      .map((r: any) => ({
+        key: r.leave_type,
+        label: typeLabelMap[r.leave_type]?.label ?? r.leave_type,
+        allocated: r.allocated,
+        balance: r.balance,
+        taken: sumByType(pastApproved, r.leave_type),
+        scheduled: sumByType(futureApproved, r.leave_type),
+      }))
 
+    setBalances(balanceItems)
     setMyLeaves(leaves.filter((l: any) =>
       l.status === 'pending' || (l.status === 'approved' && l.date_from >= todayStr)
     ))
@@ -192,58 +181,45 @@ export default function Dashboard() {
       tomorrow: allTeam.filter(l => l.date_from <= tomorrowStr && l.date_to >= tomorrowStr),
       nextWeek: allTeam.filter(l => l.date_from <= nwEndStr    && l.date_to >= nwStartStr),
     })
-
     setHolidays(holidayRows ?? [])
     setWorkingSats({ company: wsRows ?? [], personal: myWsRows ?? [] })
   }
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      console.log('[Dashboard] getSession result — session:', session ? `uid=${session.user.id} email=${session.user.email}` : 'null')
       if (!session) { router.push('/'); return }
       setUser(session.user)
 
-      // Look up the user row — use maybeSingle so a missing row returns null instead of throwing
-      console.log('[Dashboard] looking up users row for email:', session.user.email)
-      const { data: dbUser, error: dbUserErr } = await supabaseAdmin
-        .from('users').select('id, is_admin').eq('email', session.user.email).maybeSingle()
-      console.log('[Dashboard] users lookup result — data:', dbUser, 'error:', dbUserErr)
+      const { data: dbUser } = await supabaseAdmin
+        .from('users').select('id, is_admin, role').eq('email', session.user.email).maybeSingle()
 
       let resolvedUser = dbUser
 
       if (!dbUser) {
-        // First login — create the user row automatically
         const newName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'New User'
-        console.log('[Dashboard] no users row found — creating new user. email:', session.user.email, 'name:', newName)
-
         const { data: created, error: createErr } = await supabaseAdmin
           .from('users')
           .insert({ email: session.user.email, name: newName, is_admin: false })
-          .select('id, is_admin')
+          .select('id, is_admin, role')
           .single()
-        console.log('[Dashboard] users insert result — data:', created, 'error:', createErr)
 
-        if (createErr || !created) {
-          console.error('[Dashboard] failed to create user row — cannot continue:', createErr)
-          return
-        }
-
+        if (createErr || !created) return
         resolvedUser = created
 
-        // Seed leave_balance for the new user
-        console.log('[Dashboard] seeding leave_balance for new user id:', created.id)
-        const { error: balErr } = await supabaseAdmin
-          .from('leave_balance')
-          .insert({ user_id: created.id, sick_leaves: 12, earned_leaves: 15, wfh_days: 24 })
-        console.log('[Dashboard] leave_balance insert result — error:', balErr)
+        // Seed leave balances from leave_types defaults + role-based WFH
+        const { data: ltDefs } = await supabaseAdmin
+          .from('leave_types').select('key, label, default_days, requires_docs, is_active, sort_order')
+          .eq('is_active', true)
+        const seedRows = buildInitialBalances(created.id, created.role, (ltDefs ?? []) as LeaveTypeDef[])
+        if (seedRows.length > 0) {
+          await supabaseAdmin.from('leave_balances').insert(seedRows)
+        }
       }
 
-      console.log('[Dashboard] resolved user:', resolvedUser)
       if (!resolvedUser) return
       setUserId(resolvedUser.id)
       const adminFlag = resolvedUser.is_admin === true
       setIsAdmin(adminFlag)
-      console.log('[Dashboard] loading dashboard data for user id:', resolvedUser.id, 'isAdmin:', adminFlag)
       await Promise.all([loadData(resolvedUser.id), loadClockData(resolvedUser.id, adminFlag)])
     })
   }, [])
@@ -253,9 +229,15 @@ export default function Dashboard() {
     const leave = myLeaves.find(l => l.id === id)
     await supabaseAdmin.from('leaves').update({ status: 'cancelled' }).eq('id', id).eq('user_id', userId)
     if (leave?.status === 'approved') {
-      const field = leave.type === 'sick' ? 'sick_leaves' : leave.type === 'earned' ? 'earned_leaves' : 'wfh_days'
-      const { data: bal } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', userId).single()
-      if (bal) await supabaseAdmin.from('leave_balance').update({ [field]: (bal as any)[field] + leave.value }).eq('user_id', userId)
+      const { data: bal } = await supabaseAdmin
+        .from('leave_balances').select('balance, allocated')
+        .eq('user_id', userId).eq('leave_type', leave.type).maybeSingle()
+      await supabaseAdmin.from('leave_balances').upsert({
+        user_id: userId,
+        leave_type: leave.type,
+        allocated: bal?.allocated ?? 0,
+        balance: (bal?.balance ?? 0) + leave.value,
+      })
     }
     await loadData(userId)
     setSaving(false)
@@ -342,25 +324,18 @@ export default function Dashboard() {
               {clockError && <p className="text-xs text-red-400 mt-2">{clockError}</p>}
             </div>
             {todayClock?.clock_in_time ? (
-              <button
-                onClick={() => deleteClockIn(userId, isAdmin)}
-                disabled={clockAction}
-                className="px-6 py-2.5 border border-red-400 text-xs tracking-[0.2em] uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-30"
-              >
+              <button onClick={() => deleteClockIn(userId, isAdmin)} disabled={clockAction}
+                className="px-6 py-2.5 border border-red-400 text-xs tracking-[0.2em] uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-30">
                 {clockAction ? '…' : 'Delete'}
               </button>
             ) : (
-              <button
-                onClick={() => clockIn(userId, isAdmin)}
-                disabled={clockAction}
-                className="px-6 py-2.5 border border-emerald-600 text-xs tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30"
-              >
+              <button onClick={() => clockIn(userId, isAdmin)} disabled={clockAction}
+                className="px-6 py-2.5 border border-emerald-600 text-xs tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30">
                 {clockAction ? '…' : 'Clock In'}
               </button>
             )}
           </div>
 
-          {/* Admin: today's team clock log */}
           {isAdmin && allClockLogs.length > 0 && (
             <div className="border border-[#ddd] border-t-0 bg-white overflow-hidden">
               <table className="w-full">
@@ -396,20 +371,23 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Balance Cards */}
-        <div className="grid grid-cols-3 gap-6 mb-14">
-          {([
-            { label: 'Sick Leaves',   key: 'sick'   as const },
-            { label: 'Earned Leaves', key: 'earned' as const },
-            { label: 'WFH Days',      key: 'wfh'    as const },
-          ] as const).map(({ label, key }) => {
-            const b = balanceData[key]
-            return (
-              <div key={label} className="border border-[#ddd] p-6 bg-white">
-                <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-3">{label}</p>
-                <p className="text-4xl font-light text-[#1a1a1a]">{b.remaining}</p>
-                <p className="text-[10px] text-[#bbb] tracking-wider mt-1 mb-4">remaining</p>
+        {/* Balance Cards — dynamic, one per leave type with a balance */}
+        {balances.length > 0 && (
+          <div className="grid grid-cols-3 gap-6 mb-14">
+            {balances.map(b => (
+              <div key={b.key} className="border border-[#ddd] p-6 bg-white">
+                <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-3">{b.label}</p>
+                <p className={`text-4xl font-light ${b.balance < 0 ? 'text-red-500' : 'text-[#1a1a1a]'}`}>
+                  {b.balance}
+                </p>
+                <p className={`text-[10px] tracking-wider mt-1 mb-4 ${b.balance < 0 ? 'text-red-400' : 'text-[#bbb]'}`}>
+                  {b.balance < 0 ? 'over quota (unpaid)' : 'remaining'}
+                </p>
                 <div className="border-t border-[#f0f0f0] pt-3 flex gap-6">
+                  <div>
+                    <p className="text-[9px] text-[#ccc] uppercase tracking-wider">Allocated</p>
+                    <p className="text-xs text-[#888] mt-0.5 font-light">{b.allocated}</p>
+                  </div>
                   <div>
                     <p className="text-[9px] text-[#ccc] uppercase tracking-wider">Taken</p>
                     <p className="text-xs text-[#888] mt-0.5 font-light">{b.taken}</p>
@@ -420,9 +398,9 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
-            )
-          })}
-        </div>
+            ))}
+          </div>
+        )}
 
         {/* Upcoming Leaves */}
         <div className="mb-14">
@@ -440,9 +418,7 @@ export default function Dashboard() {
                           <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Type</label>
                           <select value={editState.type} onChange={e => setEditState({ ...editState, type: e.target.value })}
                             className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
-                            <option value="sick">Sick Leave</option>
-                            <option value="earned">Earned Leave</option>
-                            <option value="wfh">WFH</option>
+                            {balances.map(b => <option key={b.key} value={b.key}>{b.label}</option>)}
                           </select>
                         </div>
                         <div>

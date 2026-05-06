@@ -156,9 +156,15 @@ export default function ProfilePage() {
     const leave = upcomingLeaves.find(l => l.id === id)
     await supabaseAdmin.from('leaves').update({ status: 'cancelled' }).eq('id', id).eq('user_id', userId)
     if (leave?.status === 'approved') {
-      const field = leave.type === 'sick' ? 'sick_leaves' : leave.type === 'earned' ? 'earned_leaves' : 'wfh_days'
-      const { data: bal } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', userId).single()
-      if (bal) await supabaseAdmin.from('leave_balance').update({ [field]: (bal as any)[field] + leave.value }).eq('user_id', userId)
+      const { data: bal } = await supabaseAdmin
+        .from('leave_balances').select('balance, allocated')
+        .eq('user_id', userId).eq('leave_type', leave.type).maybeSingle()
+      await supabaseAdmin.from('leave_balances').upsert({
+        user_id: userId,
+        leave_type: leave.type,
+        allocated: bal?.allocated ?? 0,
+        balance: (bal?.balance ?? 0) + leave.value,
+      })
     }
     await loadLeaves(userId)
     setLeaveSaving(false)

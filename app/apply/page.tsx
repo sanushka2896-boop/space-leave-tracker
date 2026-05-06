@@ -4,6 +4,8 @@ import { supabase, supabaseAdmin } from '../lib/supabase'
 import { useRouter } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import Nav from '../components/Nav'
+import type { LeaveTypeDef } from '../lib/leaveTypes'
+import { isWfhEligible } from '../lib/leaveTypes'
 
 function calcWorkingDays(from: string, to: string): number {
   const start = new Date(from + 'T00:00:00')
@@ -22,7 +24,10 @@ export default function ApplyLeave() {
   const [user, setUser] = useState<User | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
-  const [form, setForm] = useState({ type: 'sick', date_from: '', date_to: '', halfDay: false, reason: '' })
+  const [userRole, setUserRole] = useState<string | null>(null)
+  const [leaveTypes, setLeaveTypes] = useState<LeaveTypeDef[]>([])
+  const [balances, setBalances] = useState<Record<string, number>>({})
+  const [form, setForm] = useState({ type: '', date_from: '', date_to: '', halfDay: false, reason: '', sabbaticalValue: '', sabbaticalUnit: 'weeks' })
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -32,14 +37,50 @@ export default function ApplyLeave() {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) { router.push('/'); return }
       setUser(session.user)
+
       const { data: dbUser } = await supabaseAdmin
-        .from('users').select('id, is_admin').eq('email', session.user.email).single()
-      if (dbUser) { setUserId(dbUser.id); setIsAdmin(dbUser.is_admin ?? false) }
+        .from('users').select('id, is_admin, role').eq('email', session.user.email).single()
+      if (!dbUser) return
+
+      setUserId(dbUser.id)
+      setIsAdmin(dbUser.is_admin ?? false)
+      setUserRole(dbUser.role ?? null)
+
+      const [{ data: types }, { data: balRows }] = await Promise.all([
+        supabaseAdmin.from('leave_types').select('key, label, default_days, requires_docs, is_active, sort_order')
+          .eq('is_active', true).order('sort_order'),
+        supabaseAdmin.from('leave_balances').select('leave_type, balance').eq('user_id', dbUser.id),
+      ])
+
+      const filtered = (types ?? []).filter((t: LeaveTypeDef) => {
+        if (t.key === 'wfh') return isWfhEligible(dbUser.role)
+        return true
+      }) as LeaveTypeDef[]
+
+      setLeaveTypes(filtered)
+      setForm(f => ({ ...f, type: filtered[0]?.key ?? 'casual' }))
+
+      const balMap: Record<string, number> = {}
+      for (const r of balRows ?? []) balMap[(r as any).leave_type] = (r as any).balance
+      setBalances(balMap)
     })
   }, [])
 
+  const selectedType = leaveTypes.find(t => t.key === form.type)
+  const isSabbatical = form.type === 'sabbatical'
   const isMultiDay = !!(form.date_from && form.date_to && form.date_from !== form.date_to)
-  const effectiveValue: number = isMultiDay
+
+  // For sabbatical: convert weeks/months to days
+  const sabbaticalDays = (() => {
+    if (!isSabbatical || !form.sabbaticalValue) return 0
+    const v = parseFloat(form.sabbaticalValue)
+    if (isNaN(v) || v <= 0) return 0
+    return form.sabbaticalUnit === 'weeks' ? Math.round(v * 5) : Math.round(v * 21) // work days
+  })()
+
+  const effectiveValue: number = isSabbatical
+    ? sabbaticalDays
+    : isMultiDay
     ? calcWorkingDays(form.date_from, form.date_to)
     : form.halfDay ? 0.5 : 1
 
@@ -52,28 +93,45 @@ export default function ApplyLeave() {
   }
 
   async function handleSubmit() {
-    if (!form.date_from) { setError('Please select a start date.'); return }
     if (!userId) { setError('Session expired. Please refresh.'); return }
-    if (effectiveValue <= 0) { setError('Date range results in 0 working days.'); return }
+    if (!form.date_from) { setError('Please select a start date.'); return }
+    if (effectiveValue <= 0) { setError('Invalid duration — 0 days calculated.'); return }
     setError('')
     setSubmitting(true)
 
     const isSick = form.type === 'sick'
+    const dateTo = isSabbatical
+      ? (() => {
+          // calculate end date from start + sabbaticalDays calendar days
+          const d = new Date(form.date_from + 'T00:00:00')
+          d.setDate(d.getDate() + (form.sabbaticalUnit === 'weeks' ? Math.round(parseFloat(form.sabbaticalValue) * 7) : Math.round(parseFloat(form.sabbaticalValue) * 30)))
+          return d.toISOString().split('T')[0]
+        })()
+      : form.date_to || form.date_from
+
     const { error: insertErr } = await supabaseAdmin.from('leaves').insert({
-      user_id: userId, type: form.type,
-      date_from: form.date_from, date_to: form.date_to || form.date_from,
-      value: effectiveValue, reason: form.reason || null,
+      user_id: userId,
+      type: form.type,
+      date_from: form.date_from,
+      date_to: dateTo,
+      value: effectiveValue,
+      reason: form.reason || null,
       status: isSick ? 'approved' : 'pending',
     })
 
     if (insertErr) { setError(insertErr.message); setSubmitting(false); return }
 
+    // Sick leave: deduct immediately; balance CAN go negative (unpaid leave)
     if (isSick) {
       const { data: bal } = await supabaseAdmin
-        .from('leave_balance').select('sick_leaves').eq('user_id', userId).single()
-      if (bal) await supabaseAdmin
-        .from('leave_balance').update({ sick_leaves: Math.max(0, bal.sick_leaves - effectiveValue) })
-        .eq('user_id', userId)
+        .from('leave_balances').select('balance, allocated')
+        .eq('user_id', userId).eq('leave_type', 'sick').maybeSingle()
+      await supabaseAdmin.from('leave_balances').upsert({
+        user_id: userId,
+        leave_type: 'sick',
+        allocated: bal?.allocated ?? 0,
+        balance: (bal?.balance ?? 0) - effectiveValue,
+      })
     }
 
     setSubmitting(false)
@@ -81,6 +139,8 @@ export default function ApplyLeave() {
   }
 
   if (!user) return null
+
+  const currentBalance = form.type ? (balances[form.type] ?? null) : null
 
   return (
     <main className="min-h-screen bg-[#F5F2EE]">
@@ -101,47 +161,109 @@ export default function ApplyLeave() {
         ) : (
           <div className="border border-[#ddd] bg-white p-10 space-y-8">
 
+            {/* Leave Type */}
             <div>
               <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Leave Type</label>
-              <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}
-                className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider uppercase text-[#1a1a1a] focus:outline-none">
-                <option value="sick">Sick Leave</option>
-                <option value="earned">Earned Leave</option>
-                <option value="wfh">Work From Home</option>
-              </select>
+              {leaveTypes.length === 0 ? (
+                <p className="text-xs text-[#bbb]">Loading leave types…</p>
+              ) : (
+                <select
+                  value={form.type}
+                  onChange={e => setForm({ ...form, type: e.target.value, date_from: '', date_to: '', halfDay: false, sabbaticalValue: '' })}
+                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider uppercase text-[#1a1a1a] focus:outline-none"
+                >
+                  {leaveTypes.map(t => (
+                    <option key={t.key} value={t.key}>{t.label}</option>
+                  ))}
+                </select>
+              )}
+
+              {/* Remaining balance */}
+              {currentBalance !== null && (
+                <p className={`text-[10px] mt-2 tracking-wider ${currentBalance < 0 ? 'text-red-400' : 'text-[#aaa]'}`}>
+                  {currentBalance < 0
+                    ? `${Math.abs(currentBalance)} days over quota (unpaid)`
+                    : `${currentBalance} days remaining`}
+                </p>
+              )}
+
+              {/* Documents required note */}
+              {selectedType?.requires_docs && (
+                <div className="mt-3 border border-amber-200 bg-amber-50 px-4 py-3">
+                  <p className="text-[10px] tracking-[0.15em] uppercase text-amber-700">
+                    Medical documents required — submit to HR within 3 days of return
+                  </p>
+                </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-2 gap-6">
-              <div>
-                <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">From</label>
-                <input type="date" value={form.date_from}
-                  onChange={e => handleDateChange('date_from', e.target.value)}
-                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs text-[#1a1a1a] focus:outline-none" />
-              </div>
-              <div>
-                <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">To</label>
-                <input type="date" value={form.date_to}
-                  min={form.date_from || undefined}
-                  onChange={e => handleDateChange('date_to', e.target.value)}
-                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs text-[#1a1a1a] focus:outline-none" />
-              </div>
-            </div>
-
-            {/* Half-day only available for single-day leaves */}
-            {!isMultiDay && form.date_from && (
+            {/* Sabbatical: duration input */}
+            {isSabbatical ? (
               <div>
                 <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Duration</label>
-                <select value={form.halfDay ? '0.5' : '1'}
-                  onChange={e => setForm({ ...form, halfDay: e.target.value === '0.5' })}
-                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider uppercase text-[#1a1a1a] focus:outline-none">
-                  <option value="1">Full Day</option>
-                  <option value="0.5">Half Day</option>
-                </select>
+                <div className="flex gap-3">
+                  <input
+                    type="number" min="1" step="1"
+                    value={form.sabbaticalValue}
+                    onChange={e => setForm({ ...form, sabbaticalValue: e.target.value })}
+                    placeholder="e.g. 4"
+                    className="flex-1 border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs text-[#1a1a1a] focus:outline-none"
+                  />
+                  <select
+                    value={form.sabbaticalUnit}
+                    onChange={e => setForm({ ...form, sabbaticalUnit: e.target.value })}
+                    className="border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider uppercase text-[#1a1a1a] focus:outline-none"
+                  >
+                    <option value="weeks">Weeks</option>
+                    <option value="months">Months</option>
+                  </select>
+                </div>
+                {sabbaticalDays > 0 && (
+                  <p className="text-[10px] text-[#aaa] mt-2 tracking-wider">{sabbaticalDays} working days</p>
+                )}
+                <div className="mt-4">
+                  <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Start Date</label>
+                  <input type="date" value={form.date_from}
+                    onChange={e => setForm({ ...form, date_from: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs text-[#1a1a1a] focus:outline-none" />
+                </div>
               </div>
+            ) : (
+              <>
+                {/* Date Range */}
+                <div className="grid grid-cols-2 gap-6">
+                  <div>
+                    <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">From</label>
+                    <input type="date" value={form.date_from}
+                      onChange={e => handleDateChange('date_from', e.target.value)}
+                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs text-[#1a1a1a] focus:outline-none" />
+                  </div>
+                  <div>
+                    <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">To</label>
+                    <input type="date" value={form.date_to}
+                      min={form.date_from || undefined}
+                      onChange={e => handleDateChange('date_to', e.target.value)}
+                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs text-[#1a1a1a] focus:outline-none" />
+                  </div>
+                </div>
+
+                {/* Half-day: single-day only */}
+                {!isMultiDay && form.date_from && (
+                  <div>
+                    <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Duration</label>
+                    <select value={form.halfDay ? '0.5' : '1'}
+                      onChange={e => setForm({ ...form, halfDay: e.target.value === '0.5' })}
+                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider uppercase text-[#1a1a1a] focus:outline-none">
+                      <option value="1">Full Day</option>
+                      <option value="0.5">Half Day</option>
+                    </select>
+                  </div>
+                )}
+              </>
             )}
 
-            {/* Deduction preview — shown as soon as a start date is picked */}
-            {form.date_from && (
+            {/* Deduction preview */}
+            {effectiveValue > 0 && (
               <div className="border border-[#eee] bg-[#fafaf9] px-5 py-4">
                 <p className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] mb-1">Leave Deduction</p>
                 <p className="text-sm font-light text-[#1a1a1a]">
@@ -149,12 +271,19 @@ export default function ApplyLeave() {
                     ? 'Half day — 0.5 days'
                     : `${effectiveValue} working day${effectiveValue !== 1 ? 's' : ''}`}
                 </p>
+                {currentBalance !== null && (
+                  <p className={`text-[10px] mt-1 ${(currentBalance - effectiveValue) < 0 ? 'text-red-400' : 'text-[#bbb]'}`}>
+                    Balance after: {(currentBalance - effectiveValue)} days
+                    {(currentBalance - effectiveValue) < 0 ? ' (unpaid)' : ''}
+                  </p>
+                )}
                 {isMultiDay && (
                   <p className="text-[10px] text-[#bbb] mt-1">Sundays excluded from count</p>
                 )}
               </div>
             )}
 
+            {/* Reason */}
             <div>
               <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">
                 Reason <span className="text-[#bbb]">(optional)</span>

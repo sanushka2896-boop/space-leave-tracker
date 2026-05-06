@@ -29,24 +29,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (updateError) return Response.json({ error: updateError.message }, { status: 500 })
 
   if (action === 'approve') {
-    const balanceField =
-      leave.type === 'sick' ? 'sick_leaves' :
-      leave.type === 'earned' ? 'earned_leaves' :
-      'wfh_days'
-
     const { data: bal } = await supabase
-      .from('leave_balance')
-      .select(balanceField)
+      .from('leave_balances')
+      .select('balance, allocated')
       .eq('user_id', leave.user_id)
-      .single()
+      .eq('leave_type', leave.type)
+      .maybeSingle()
 
-    if (bal) {
-      const current = (bal as any)[balanceField] as number
-      await supabase
-        .from('leave_balance')
-        .update({ [balanceField]: Math.max(0, current - leave.value) })
-        .eq('user_id', leave.user_id)
-    }
+    await supabase.from('leave_balances').upsert({
+      user_id: leave.user_id,
+      leave_type: leave.type,
+      allocated: (bal as any)?.allocated ?? 0,
+      balance: ((bal as any)?.balance ?? 0) - leave.value,
+    })
   }
 
   // Fetch user name separately (no FK join)

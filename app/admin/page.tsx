@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { supabase, supabaseAdmin } from '../lib/supabase'
 import { useRouter } from 'next/navigation'
 import Nav from '../components/Nav'
+import type { LeaveTypeDef } from '../lib/leaveTypes'
 
 type Leave = {
   id: string
@@ -24,7 +25,7 @@ type TeamMember = {
   location: string
   is_bd_associate: boolean
   is_admin: boolean
-  balance: { sick_leaves: number; earned_leaves: number; wfh_days: number }
+  balances: { leave_type: string; allocated: number; balance: number }[]
 }
 
 type Holiday = { id: string; name: string; date: string; type: string }
@@ -69,6 +70,7 @@ export default function AdminPage() {
   const [adminUserId, setAdminUserId] = useState('')
   const [pendingLeaves, setPendingLeaves] = useState<Leave[]>([])
   const [team, setTeam] = useState<TeamMember[]>([])
+  const [leaveTypes, setLeaveTypes] = useState<LeaveTypeDef[]>([])
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [reviews, setReviews] = useState<Review[]>([])
   const [workingSaturdays, setWorkingSaturdays] = useState<WorkingSaturday[]>([])
@@ -86,14 +88,24 @@ export default function AdminPage() {
   const [rError, setRError] = useState('')
   const [rEditId, setREditId] = useState<string | null>(null)
 
-  const [aForm, setAForm] = useState({ user_id: '', type: 'earned', date_from: '', date_to: '', value: '1' })
+  const [aForm, setAForm] = useState({ user_id: '', type: 'casual', date_from: '', date_to: '', value: '1' })
   const [aSaving, setASaving] = useState(false)
   const [aError, setAError] = useState('')
 
-  const [qForm, setQForm] = useState({ user_id: '', sick_leaves: '12', earned_leaves: '15', wfh_days: '24' })
+  // Dynamic quota — employee selector + per-type editable rows
+  const [qUserId, setQUserId] = useState('')
+  const [qBalancesEdit, setQBalancesEdit] = useState<Record<string, { allocated: string; balance: string }>>({})
   const [qSaving, setQSaving] = useState(false)
   const [qError, setQError] = useState('')
   const [qSuccess, setQSuccess] = useState('')
+
+  // Leave Type Management
+  const [ltForm, setLtForm] = useState({ key: '', label: '', default_days: '', requires_docs: false, sort_order: '99' })
+  const [ltSaving, setLtSaving] = useState(false)
+  const [ltError, setLtError] = useState('')
+  const [ltEditKey, setLtEditKey] = useState<string | null>(null)
+  const [ltEditForm, setLtEditForm] = useState({ label: '', default_days: '', requires_docs: false, sort_order: '0' })
+  const [ltEditSaving, setLtEditSaving] = useState(false)
 
   const [wsDate, setWsDate] = useState('')
   const [wsSaving, setWsSaving] = useState(false)
@@ -120,34 +132,24 @@ export default function AdminPage() {
   }
 
   async function loadData() {
-    console.log('[Admin] loadData: fetching all data...')
     const [
       { data: leavesRaw, error: leavesErr },
       { data: usersRaw, error: usersErr },
-      { data: holidaysRaw, error: holidaysErr },
-      { data: reviewsRaw, error: reviewsErr },
-      { data: wsRaw, error: wsErr },
+      { data: holidaysRaw },
+      { data: reviewsRaw },
+      { data: wsRaw },
+      { data: ltData },
     ] = await Promise.all([
       supabaseAdmin.from('leaves').select('*').eq('status', 'pending').order('created_at', { ascending: false }),
       supabaseAdmin.from('users').select('id, name, email, role, location, is_bd_associate, is_admin'),
       supabaseAdmin.from('holidays').select('*').order('date', { ascending: true }),
       supabaseAdmin.from('reviews').select('id, user_id, date, type, notes, created_at').order('date', { ascending: true }),
       supabaseAdmin.from('working_saturdays').select('*').is('user_id', null).order('date', { ascending: true }),
+      supabaseAdmin.from('leave_types').select('*').order('sort_order'),
     ])
 
     if (leavesErr) console.error('[Admin] loadData leaves error:', leavesErr)
     if (usersErr) console.error('[Admin] loadData users error:', usersErr)
-    if (holidaysErr) console.error('[Admin] loadData holidays error:', holidaysErr)
-    if (reviewsErr) console.error('[Admin] loadData reviews error:', reviewsErr)
-    if (wsErr) console.error('[Admin] loadData working_saturdays error:', wsErr)
-
-    console.log('[Admin] loadData results:', {
-      leaves: leavesRaw?.length,
-      users: usersRaw?.length,
-      holidays: holidaysRaw?.length,
-      reviews: reviewsRaw?.length,
-      workingSaturdays: wsRaw?.length,
-    })
 
     const userMap: Record<string, { name: string; email: string }> = {}
     for (const u of usersRaw ?? []) userMap[u.id] = { name: u.name, email: u.email }
@@ -156,19 +158,21 @@ export default function AdminPage() {
     const enrichedReviews: Review[] = (reviewsRaw ?? []).map((r: any) => ({ ...r, users: userMap[r.user_id] ?? null }))
 
     const userIds = (usersRaw ?? []).map((u: any) => u.id)
-    let balances: any[] = []
+    let balanceRows: any[] = []
     if (userIds.length > 0) {
-      const { data: b, error: balErr } = await supabaseAdmin.from('leave_balance').select('*').in('user_id', userIds)
-      if (balErr) console.error('[Admin] loadData leave_balance error:', balErr)
-      balances = b ?? []
-      console.log('[Admin] loadData balances:', balances.length)
+      const { data: b } = await supabaseAdmin.from('leave_balances').select('*').in('user_id', userIds)
+      balanceRows = b ?? []
     }
 
+    const lts = (ltData ?? []) as LeaveTypeDef[]
     const enrichedTeam: TeamMember[] = (usersRaw ?? []).map((u: any) => ({
       ...u,
-      balance: balances.find((b: any) => b.user_id === u.id) ?? { sick_leaves: 12, earned_leaves: 15, wfh_days: 24 },
+      balances: balanceRows
+        .filter((b: any) => b.user_id === u.id)
+        .map((b: any) => ({ leave_type: b.leave_type, allocated: b.allocated, balance: b.balance })),
     }))
 
+    setLeaveTypes(lts)
     setPendingLeaves(enrichedLeaves)
     setTeam(enrichedTeam)
     setHolidays(holidaysRaw ?? [])
@@ -179,54 +183,55 @@ export default function AdminPage() {
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) { router.push('/'); return }
-
-      console.log('[Admin] checking admin status for:', session.user.email)
-      const { data: dbUser, error: dbErr } = await supabaseAdmin
-        .from('users')
-        .select('id, is_admin')
-        .eq('email', session.user.email)
-        .single()
-
-      if (dbErr) console.error('[Admin] user lookup error:', dbErr)
-
+      const { data: dbUser } = await supabaseAdmin
+        .from('users').select('id, is_admin').eq('email', session.user.email).single()
       if (!dbUser?.is_admin) { router.push('/dashboard'); return }
-
       setAdminUserId(dbUser.id)
       await Promise.all([loadData(), loadOvertimeEntries()])
       setLoading(false)
     })
   }, [])
 
+  function buildQuotaEdit(uid: string, members: TeamMember[], lts: LeaveTypeDef[]) {
+    const member = members.find(m => m.id === uid)
+    const balMap: Record<string, { allocated: string; balance: string }> = {}
+    for (const lt of lts.filter(t => t.is_active)) {
+      const existing = member?.balances.find(b => b.leave_type === lt.key)
+      balMap[lt.key] = {
+        allocated: String(existing?.allocated ?? lt.default_days ?? 0),
+        balance: String(existing?.balance ?? lt.default_days ?? 0),
+      }
+    }
+    return balMap
+  }
+
   async function handleLeaveAction(id: string, action: 'approve' | 'reject', rejectionReason?: string) {
     setActing(id + action)
     setActionError('')
     const newStatus = action === 'approve' ? 'approved' : 'rejected'
-
     const leave = pendingLeaves.find(l => l.id === id)
     if (!leave) { setActing(null); return }
-
-    console.log('[Admin] handleLeaveAction:', { id, action, newStatus, rejectionReason, leave })
 
     const updatePayload: Record<string, any> = { status: newStatus }
     if (action === 'reject' && rejectionReason) updatePayload.rejection_reason = rejectionReason
 
     const { error: updateErr } = await supabaseAdmin.from('leaves').update(updatePayload).eq('id', id)
     if (updateErr) {
-      console.error('[Admin] handleLeaveAction update error:', updateErr)
       setActionError(`Failed to ${action}: ${updateErr.message}`)
       setActing(null)
       return
     }
 
     if (action === 'approve') {
-      const field = leave.type === 'sick' ? 'sick_leaves' : leave.type === 'earned' ? 'earned_leaves' : 'wfh_days'
-      const { data: bal, error: balErr } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', leave.user_id).single()
-      if (balErr) console.error('[Admin] handleLeaveAction balance fetch error:', balErr)
-      if (bal) {
-        const current = (bal as any)[field] as number
-        const { error: balUpdateErr } = await supabaseAdmin.from('leave_balance').update({ [field]: Math.max(0, current - leave.value) }).eq('user_id', leave.user_id)
-        if (balUpdateErr) console.error('[Admin] handleLeaveAction balance update error:', balUpdateErr)
-      }
+      const { data: bal } = await supabaseAdmin
+        .from('leave_balances').select('balance, allocated')
+        .eq('user_id', leave.user_id).eq('leave_type', leave.type).maybeSingle()
+      await supabaseAdmin.from('leave_balances').upsert({
+        user_id: leave.user_id,
+        leave_type: leave.type,
+        allocated: bal?.allocated ?? 0,
+        balance: (bal?.balance ?? 0) - leave.value,
+      })
     }
 
     await loadData()
@@ -237,24 +242,15 @@ export default function AdminPage() {
     if (!hForm.name || !hForm.date) return
     setHError('')
     setHSaving(true)
-    console.log('[Admin] addHoliday:', hForm)
-    const { data, error } = await supabaseAdmin.from('holidays').insert({ name: hForm.name, date: hForm.date, type: hForm.type }).select()
-    console.log('[Admin] addHoliday result:', { data, error })
-    if (error) {
-      console.error('[Admin] addHoliday error:', error)
-      setHError(error.message)
-      setHSaving(false)
-      return
-    }
+    const { error } = await supabaseAdmin.from('holidays').insert({ name: hForm.name, date: hForm.date, type: hForm.type })
+    if (error) { setHError(error.message); setHSaving(false); return }
     setHForm({ name: '', date: '', type: 'national' })
     await loadData()
     setHSaving(false)
   }
 
   async function deleteHoliday(id: string) {
-    console.log('[Admin] deleteHoliday:', id)
-    const { error } = await supabaseAdmin.from('holidays').delete().eq('id', id)
-    if (error) console.error('[Admin] deleteHoliday error:', error)
+    await supabaseAdmin.from('holidays').delete().eq('id', id)
     await loadData()
   }
 
@@ -262,30 +258,17 @@ export default function AdminPage() {
     if (!rForm.user_id || !rForm.date) return
     setRError('')
     setRSaving(true)
-    console.log('[Admin] saveReview:', { rForm, rEditId, adminUserId })
-
     let error: any
     if (rEditId) {
-      const res = await supabaseAdmin
-        .from('reviews')
-        .update({ date: rForm.date, type: rForm.type, notes: rForm.notes || null })
-        .eq('id', rEditId)
+      const res = await supabaseAdmin.from('reviews')
+        .update({ date: rForm.date, type: rForm.type, notes: rForm.notes || null }).eq('id', rEditId)
       error = res.error
-      console.log('[Admin] saveReview update result:', { data: res.data, error: res.error })
     } else {
-      const res = await supabaseAdmin
-        .from('reviews')
+      const res = await supabaseAdmin.from('reviews')
         .insert({ user_id: rForm.user_id, date: rForm.date, type: rForm.type, notes: rForm.notes || null, created_by: adminUserId || null })
       error = res.error
-      console.log('[Admin] saveReview insert result:', { data: res.data, error: res.error })
     }
-
-    if (error) {
-      console.error('[Admin] saveReview error:', error)
-      setRError(error.message)
-      setRSaving(false)
-      return
-    }
+    if (error) { setRError(error.message); setRSaving(false); return }
     setREditId(null)
     setRForm({ user_id: '', date: '', type: 'annual', notes: '' })
     await loadData()
@@ -293,9 +276,7 @@ export default function AdminPage() {
   }
 
   async function deleteReview(id: string) {
-    console.log('[Admin] deleteReview:', id)
-    const { error } = await supabaseAdmin.from('reviews').delete().eq('id', id)
-    if (error) console.error('[Admin] deleteReview error:', error)
+    await supabaseAdmin.from('reviews').delete().eq('id', id)
     await loadData()
   }
 
@@ -309,10 +290,8 @@ export default function AdminPage() {
     if (!aForm.user_id || !aForm.date_from) return
     setAError('')
     setASaving(true)
-
     const value = parseFloat(aForm.value)
-    console.log('[Admin] assignLeave:', { ...aForm, value })
-    const { data, error: insertErr } = await supabaseAdmin.from('leaves').insert({
+    const { error: insertErr } = await supabaseAdmin.from('leaves').insert({
       user_id: aForm.user_id,
       type: aForm.type,
       date_from: aForm.date_from,
@@ -320,80 +299,38 @@ export default function AdminPage() {
       value,
       status: 'approved',
       reason: 'Assigned by admin',
-    }).select()
-    console.log('[Admin] assignLeave result:', { data, error: insertErr })
+    })
+    if (insertErr) { setAError(insertErr.message); setASaving(false); return }
 
-    if (insertErr) {
-      console.error('[Admin] assignLeave error:', insertErr)
-      setAError(insertErr.message)
-      setASaving(false)
-      return
-    }
+    const { data: bal } = await supabaseAdmin
+      .from('leave_balances').select('balance, allocated')
+      .eq('user_id', aForm.user_id).eq('leave_type', aForm.type).maybeSingle()
+    await supabaseAdmin.from('leave_balances').upsert({
+      user_id: aForm.user_id,
+      leave_type: aForm.type,
+      allocated: bal?.allocated ?? 0,
+      balance: (bal?.balance ?? 0) - value,
+    })
 
-    const field = aForm.type === 'sick' ? 'sick_leaves' : aForm.type === 'earned' ? 'earned_leaves' : 'wfh_days'
-    const { data: bal, error: balErr } = await supabaseAdmin.from('leave_balance').select(field).eq('user_id', aForm.user_id).single()
-    if (balErr) console.error('[Admin] assignLeave balance fetch error:', balErr)
-    if (bal) {
-      const current = (bal as any)[field] as number
-      const { error: balUpdateErr } = await supabaseAdmin.from('leave_balance').update({ [field]: Math.max(0, current - value) }).eq('user_id', aForm.user_id)
-      if (balUpdateErr) console.error('[Admin] assignLeave balance update error:', balUpdateErr)
-    }
-
-    setAForm({ user_id: '', type: 'earned', date_from: '', date_to: '', value: '1' })
+    setAForm({ user_id: '', type: 'casual', date_from: '', date_to: '', value: '1' })
     await loadData()
     setASaving(false)
   }
 
-  async function saveQuota() {
-    if (!qForm.user_id) return
+  async function saveAllQuota() {
+    if (!qUserId) return
     setQError('')
     setQSuccess('')
     setQSaving(true)
-
-    const sick_leaves = parseInt(qForm.sick_leaves) || 0
-    const earned_leaves = parseInt(qForm.earned_leaves) || 0
-    const wfh_days = parseInt(qForm.wfh_days) || 0
-    const payload = { user_id: qForm.user_id, sick_leaves, earned_leaves, wfh_days }
-
-    console.log('[Admin] saveQuota payload:', payload)
-
-    const { data: existing, error: fetchErr } = await supabaseAdmin
-      .from('leave_balance')
-      .select('id')
-      .eq('user_id', qForm.user_id)
-      .single()
-
-    if (fetchErr && fetchErr.code !== 'PGRST116') {
-      console.error('[Admin] saveQuota fetch error:', fetchErr)
-    }
-
-    let saveErr: any
-    if (existing) {
-      console.log('[Admin] saveQuota: updating existing record', existing.id)
-      const res = await supabaseAdmin
-        .from('leave_balance')
-        .update({ sick_leaves, earned_leaves, wfh_days })
-        .eq('user_id', qForm.user_id)
-      saveErr = res.error
-      console.log('[Admin] saveQuota update result:', { data: res.data, error: res.error })
-    } else {
-      console.log('[Admin] saveQuota: inserting new record')
-      const res = await supabaseAdmin
-        .from('leave_balance')
-        .insert(payload)
-      saveErr = res.error
-      console.log('[Admin] saveQuota insert result:', { data: res.data, error: res.error })
-    }
-
-    if (saveErr) {
-      console.error('[Admin] saveQuota error:', saveErr)
-      setQError(saveErr.message)
-      setQSaving(false)
-      return
-    }
-
-    console.log('[Admin] saveQuota success')
-    setQSuccess('Quota updated successfully.')
+    const rows = Object.entries(qBalancesEdit).map(([lt, vals]) => ({
+      user_id: qUserId,
+      leave_type: lt,
+      allocated: parseFloat(vals.allocated) || 0,
+      balance: parseFloat(vals.balance) || 0,
+    }))
+    const { error } = await supabaseAdmin.from('leave_balances').upsert(rows)
+    if (error) { setQError(error.message); setQSaving(false); return }
+    setQSuccess('Quotas updated.')
     await loadData()
     setQSaving(false)
   }
@@ -404,25 +341,62 @@ export default function AdminPage() {
     if (d.getDay() !== 6) { setWsError('Date must be a Saturday.'); return }
     setWsError('')
     setWsSaving(true)
-    console.log('[Admin] addWorkingSaturday:', wsDate)
-    const { data, error } = await supabaseAdmin.from('working_saturdays').insert({ date: wsDate, user_id: null }).select()
-    console.log('[Admin] addWorkingSaturday result:', { data, error })
-    if (error) {
-      console.error('[Admin] addWorkingSaturday error:', error)
-      setWsError(error.message)
-      setWsSaving(false)
-      return
-    }
+    const { error } = await supabaseAdmin.from('working_saturdays').insert({ date: wsDate, user_id: null })
+    if (error) { setWsError(error.message); setWsSaving(false); return }
     setWsDate('')
     await loadData()
     setWsSaving(false)
   }
 
   async function removeWorkingSaturday(id: string) {
-    console.log('[Admin] removeWorkingSaturday:', id)
-    const { error } = await supabaseAdmin.from('working_saturdays').delete().eq('id', id)
-    if (error) console.error('[Admin] removeWorkingSaturday error:', error)
+    await supabaseAdmin.from('working_saturdays').delete().eq('id', id)
     await loadData()
+  }
+
+  async function addLeaveType() {
+    if (!ltForm.key || !ltForm.label) return
+    setLtError('')
+    setLtSaving(true)
+    const { error } = await supabaseAdmin.from('leave_types').insert({
+      key: ltForm.key.toLowerCase().replace(/\s+/g, '_'),
+      label: ltForm.label,
+      default_days: ltForm.default_days ? parseFloat(ltForm.default_days) : null,
+      requires_docs: ltForm.requires_docs,
+      is_active: true,
+      sort_order: parseInt(ltForm.sort_order) || 99,
+    })
+    if (error) { setLtError(error.message); setLtSaving(false); return }
+    setLtForm({ key: '', label: '', default_days: '', requires_docs: false, sort_order: '99' })
+    await loadData()
+    setLtSaving(false)
+  }
+
+  async function toggleLeaveType(key: string, is_active: boolean) {
+    await supabaseAdmin.from('leave_types').update({ is_active }).eq('key', key)
+    await loadData()
+  }
+
+  function startEditLeaveType(lt: LeaveTypeDef) {
+    setLtEditKey(lt.key)
+    setLtEditForm({
+      label: lt.label,
+      default_days: lt.default_days != null ? String(lt.default_days) : '',
+      requires_docs: lt.requires_docs,
+      sort_order: String(lt.sort_order),
+    })
+  }
+
+  async function saveLeaveTypeEdit(key: string) {
+    setLtEditSaving(true)
+    await supabaseAdmin.from('leave_types').update({
+      label: ltEditForm.label,
+      default_days: ltEditForm.default_days ? parseFloat(ltEditForm.default_days) : null,
+      requires_docs: ltEditForm.requires_docs,
+      sort_order: parseInt(ltEditForm.sort_order) || 0,
+    }).eq('key', key)
+    setLtEditKey(null)
+    await loadData()
+    setLtEditSaving(false)
   }
 
   function formatDate(d: string) {
@@ -433,13 +407,6 @@ export default function AdminPage() {
     const [h, m] = t.split(':').map(Number)
     const ampm = h >= 12 ? 'PM' : 'AM'
     return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
-  }
-  function minutesToHM(mins: number | null) {
-    if (mins === null || mins <= 0) return '—'
-    const h = Math.floor(mins / 60), m = mins % 60
-    if (h === 0) return `${m} min${m !== 1 ? 's' : ''}`
-    if (m === 0) return `${h} hr${h !== 1 ? 's' : ''}`
-    return `${h} hr ${m} min${m !== 1 ? 's' : ''}`
   }
 
   async function approveOvertime(entry: OvertimeEntry) {
@@ -504,7 +471,7 @@ export default function AdminPage() {
 
       <div className="px-12 py-12 max-w-6xl mx-auto space-y-16">
 
-        {/* Overtime Approvals — TOP */}
+        {/* Overtime Approvals */}
         <section>
           <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">
             Overtime Approvals
@@ -676,14 +643,19 @@ export default function AdminPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[#eee]">
-                  {['Name', 'Role', 'Location', 'Sick', 'Earned', 'WFH', ''].map(h => (
+                  {['Name', 'Role', 'Location', 'Casual', 'Sick', 'WFH', ''].map(h => (
                     <th key={h} className="px-6 py-3 text-left text-xs tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f5f5f5]">
-                {team.map(m => (
-                  editingTeamId === m.id ? (
+                {team.map(m => {
+                  const getBalance = (type: string) => {
+                    const b = m.balances.find(b => b.leave_type === type)
+                    if (!b) return <span className="text-[#ccc]">—</span>
+                    return <span className={b.balance < 0 ? 'text-red-500' : ''}>{b.balance}</span>
+                  }
+                  return editingTeamId === m.id ? (
                     <tr key={m.id} className="bg-[#fafafa]">
                       <td colSpan={7} className="px-6 py-4">
                         <div className="flex gap-3 flex-wrap items-end">
@@ -730,9 +702,9 @@ export default function AdminPage() {
                       </td>
                       <td className="px-6 py-4 text-xs text-[#888]">{m.role || '—'}</td>
                       <td className="px-6 py-4 text-xs text-[#888]">{m.location || '—'}</td>
-                      <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.sick_leaves}</td>
-                      <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.earned_leaves}</td>
-                      <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.wfh_days}</td>
+                      <td className="px-6 py-4 text-xs font-light">{getBalance('casual')}</td>
+                      <td className="px-6 py-4 text-xs font-light">{getBalance('sick')}</td>
+                      <td className="px-6 py-4 text-xs font-light">{getBalance('wfh')}</td>
                       <td className="px-6 py-4">
                         <button onClick={() => startEditTeamMember(m)}
                           className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
@@ -741,7 +713,7 @@ export default function AdminPage() {
                       </td>
                     </tr>
                   )
-                ))}
+                })}
               </tbody>
             </table>
           </div>
@@ -750,23 +722,19 @@ export default function AdminPage() {
         {/* Leave Quota Assignment */}
         <section>
           <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Leave Quota Assignment</h3>
-          <p className="text-xs text-[#bbb] tracking-wider mb-6">Set annual leave quotas per employee. This updates their leave_balance directly.</p>
-          <div className="border border-[#ddd] bg-white p-6 max-w-xl space-y-4">
+          <p className="text-xs text-[#bbb] tracking-wider mb-6">Set allocated and remaining balances per leave type for each employee.</p>
+          <div className="border border-[#ddd] bg-white p-6 max-w-2xl space-y-5">
             <div>
               <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Employee</label>
               <select
-                value={qForm.user_id}
+                value={qUserId}
                 onChange={e => {
                   const uid = e.target.value
-                  const member = team.find(m => m.id === uid)
-                  setQForm({
-                    user_id: uid,
-                    sick_leaves: member ? String(member.balance.sick_leaves) : '12',
-                    earned_leaves: member ? String(member.balance.earned_leaves) : '15',
-                    wfh_days: member ? String(member.balance.wfh_days) : '24',
-                  })
+                  setQUserId(uid)
                   setQError('')
                   setQSuccess('')
+                  if (uid) setQBalancesEdit(buildQuotaEdit(uid, team, leaveTypes))
+                  else setQBalancesEdit({})
                 }}
                 className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
               >
@@ -774,46 +742,60 @@ export default function AdminPage() {
                 {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
               </select>
             </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Sick Leaves</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={qForm.sick_leaves}
-                  onChange={e => setQForm({ ...qForm, sick_leaves: e.target.value })}
-                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
-                />
+
+            {qUserId && leaveTypes.filter(lt => lt.is_active).length > 0 && (
+              <div className="border border-[#eee]">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#eee] bg-[#fafafa]">
+                      <th className="px-4 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">Leave Type</th>
+                      <th className="px-4 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">Allocated</th>
+                      <th className="px-4 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">Remaining</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f5f5f5]">
+                    {leaveTypes.filter(lt => lt.is_active).map(lt => (
+                      <tr key={lt.key}>
+                        <td className="px-4 py-2 text-xs text-[#1a1a1a]">{lt.label}</td>
+                        <td className="px-4 py-2">
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={qBalancesEdit[lt.key]?.allocated ?? ''}
+                            onChange={e => setQBalancesEdit(prev => ({
+                              ...prev,
+                              [lt.key]: { ...prev[lt.key], allocated: e.target.value },
+                            }))}
+                            className="w-20 border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none"
+                          />
+                        </td>
+                        <td className="px-4 py-2">
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={qBalancesEdit[lt.key]?.balance ?? ''}
+                            onChange={e => setQBalancesEdit(prev => ({
+                              ...prev,
+                              [lt.key]: { ...prev[lt.key], balance: e.target.value },
+                            }))}
+                            className="w-20 border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <div>
-                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Earned Leaves</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={qForm.earned_leaves}
-                  onChange={e => setQForm({ ...qForm, earned_leaves: e.target.value })}
-                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">WFH Days</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={qForm.wfh_days}
-                  onChange={e => setQForm({ ...qForm, wfh_days: e.target.value })}
-                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
-                />
-              </div>
-            </div>
+            )}
+
             {qError && <p className="text-xs text-red-400">{qError}</p>}
             {qSuccess && <p className="text-xs text-emerald-600">{qSuccess}</p>}
             <button
-              onClick={saveQuota}
-              disabled={qSaving || !qForm.user_id}
+              onClick={saveAllQuota}
+              disabled={qSaving || !qUserId}
               className="w-full py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
             >
-              {qSaving ? 'Saving…' : 'Set Quota'}
+              {qSaving ? 'Saving…' : 'Save Quotas'}
             </button>
           </div>
         </section>
@@ -842,9 +824,9 @@ export default function AdminPage() {
                   onChange={e => setAForm({ ...aForm, type: e.target.value })}
                   className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none"
                 >
-                  <option value="sick">Sick</option>
-                  <option value="earned">Earned</option>
-                  <option value="wfh">WFH</option>
+                  {leaveTypes.filter(lt => lt.is_active).map(lt => (
+                    <option key={lt.key} value={lt.key}>{lt.label}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -885,6 +867,137 @@ export default function AdminPage() {
             >
               {aSaving ? 'Assigning…' : 'Assign Leave'}
             </button>
+          </div>
+        </section>
+
+        {/* Leave Type Definitions */}
+        <section>
+          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Leave Type Definitions</h3>
+          <p className="text-xs text-[#bbb] tracking-wider mb-6">Add or edit leave types. New types appear automatically in the apply form and quota editor.</p>
+          <div className="grid grid-cols-2 gap-8">
+            {/* Add form */}
+            <div className="border border-[#ddd] bg-white p-6 space-y-3">
+              <p className="text-xs tracking-[0.2em] uppercase text-[#888]">Add Leave Type</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Key (unique ID)</label>
+                  <input type="text" placeholder="e.g. paternity" value={ltForm.key}
+                    onChange={e => setLtForm({ ...ltForm, key: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                </div>
+                <div>
+                  <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Label</label>
+                  <input type="text" placeholder="e.g. Paternity Leave" value={ltForm.label}
+                    onChange={e => setLtForm({ ...ltForm, label: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                </div>
+                <div>
+                  <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Default Days (blank = custom)</label>
+                  <input type="number" min="0" step="1" placeholder="e.g. 10" value={ltForm.default_days}
+                    onChange={e => setLtForm({ ...ltForm, default_days: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                </div>
+                <div>
+                  <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Sort Order</label>
+                  <input type="number" min="0" value={ltForm.sort_order}
+                    onChange={e => setLtForm({ ...ltForm, sort_order: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={ltForm.requires_docs}
+                  onChange={e => setLtForm({ ...ltForm, requires_docs: e.target.checked })}
+                  className="w-4 h-4 accent-[#1a1a1a]" />
+                <span className="text-xs text-[#888]">Requires medical documents</span>
+              </label>
+              {ltError && <p className="text-xs text-red-400">{ltError}</p>}
+              <button
+                onClick={addLeaveType}
+                disabled={ltSaving || !ltForm.key || !ltForm.label}
+                className="w-full py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
+              >
+                {ltSaving ? 'Adding…' : 'Add Type'}
+              </button>
+            </div>
+
+            {/* Leave types table */}
+            <div className="border border-[#ddd] bg-white overflow-y-auto max-h-[420px]">
+              {leaveTypes.length === 0 ? (
+                <p className="p-6 text-xs text-[#bbb] tracking-wider">No leave types defined.</p>
+              ) : leaveTypes.map(lt => (
+                <div key={lt.key} className="border-b border-[#eee] last:border-0">
+                  {ltEditKey === lt.key ? (
+                    <div className="px-5 py-3 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Label</label>
+                          <input type="text" value={ltEditForm.label}
+                            onChange={e => setLtEditForm({ ...ltEditForm, label: e.target.value })}
+                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Default Days</label>
+                          <input type="number" min="0" step="1" value={ltEditForm.default_days}
+                            onChange={e => setLtEditForm({ ...ltEditForm, default_days: e.target.value })}
+                            placeholder="blank = custom"
+                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none" />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={ltEditForm.requires_docs}
+                            onChange={e => setLtEditForm({ ...ltEditForm, requires_docs: e.target.checked })}
+                            className="w-3.5 h-3.5 accent-[#1a1a1a]" />
+                          <span className="text-[10px] text-[#888]">Requires docs</span>
+                        </label>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-[#aaa]">Order:</span>
+                          <input type="number" min="0" value={ltEditForm.sort_order}
+                            onChange={e => setLtEditForm({ ...ltEditForm, sort_order: e.target.value })}
+                            className="w-14 border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none" />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => saveLeaveTypeEdit(lt.key)} disabled={ltEditSaving}
+                          className="px-4 py-1 border border-[#1a1a1a] text-[10px] tracking-wider uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                          {ltEditSaving ? '…' : 'Save'}
+                        </button>
+                        <button onClick={() => setLtEditKey(null)}
+                          className="px-4 py-1 border border-[#ddd] text-[10px] uppercase text-[#888] cursor-pointer">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="px-5 py-3 flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className={`text-xs ${lt.is_active ? 'text-[#1a1a1a]' : 'text-[#bbb] line-through'}`}>{lt.label}</p>
+                          {lt.requires_docs && (
+                            <span className="text-[9px] bg-amber-50 text-amber-600 px-1.5 py-0.5 tracking-wider uppercase">Docs</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-[#aaa] mt-0.5">
+                          {lt.key} · {lt.default_days != null ? `${lt.default_days}d` : 'custom'} · order {lt.sort_order}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0 ml-3">
+                        <button onClick={() => startEditLeaveType(lt)}
+                          className="text-[10px] text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => toggleLeaveType(lt.key, !lt.is_active)}
+                          className={`text-[10px] transition-colors cursor-pointer ${lt.is_active ? 'text-[#aaa] hover:text-red-500' : 'text-emerald-500 hover:text-emerald-700'}`}
+                        >
+                          {lt.is_active ? 'Deactivate' : 'Activate'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 

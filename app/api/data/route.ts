@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { notifySlack, leaveSubmittedMessage } from '../../lib/slack'
+import { buildInitialBalances } from '../../lib/leaveTypes'
 
 // Use the NEXT_PUBLIC service key so it works in both edge and node runtimes
 function getAdmin() {
@@ -40,26 +41,28 @@ export async function GET(req: NextRequest) {
     console.log('[data GET] created user:', newUser?.id, 'err:', insertErr?.message)
     if (newUser) {
       dbUser = newUser
-      const { error: balErr } = await admin
-        .from('leave_balance')
-        .insert({ user_id: newUser.id, sick_leaves: 12, earned_leaves: 15, wfh_days: 24 })
-      console.log('[data GET] balance insert err:', balErr?.message)
+      const { data: ltData } = await admin.from('leave_types').select('*').eq('is_active', true)
+      const initialRows = buildInitialBalances(newUser.id, newUser.role ?? null, (ltData ?? []) as any[])
+      if (initialRows.length > 0) {
+        const { error: balErr } = await admin.from('leave_balances').insert(initialRows)
+        console.log('[data GET] balance insert err:', balErr?.message)
+      }
     }
   }
 
   if (!dbUser) return Response.json({ error: 'could not resolve user' }, { status: 500 })
 
-  const [{ data: balance, error: balFetchErr }, { data: leaves, error: leavesFetchErr }] = await Promise.all([
-    admin.from('leave_balance').select('*').eq('user_id', dbUser.id).single(),
+  const [{ data: balanceRows, error: balFetchErr }, { data: leaves, error: leavesFetchErr }] = await Promise.all([
+    admin.from('leave_balances').select('leave_type, allocated, balance').eq('user_id', dbUser.id),
     admin.from('leaves').select('*').eq('user_id', dbUser.id).order('created_at', { ascending: false }),
   ])
-  console.log('[data GET] balance:', balance, 'err:', balFetchErr?.message)
+  console.log('[data GET] balance rows:', balanceRows?.length, 'err:', balFetchErr?.message)
   console.log('[data GET] leaves count:', leaves?.length, 'err:', leavesFetchErr?.message)
 
   return Response.json({
     userId: dbUser.id,
     isAdmin: dbUser.is_admin ?? false,
-    balance: balance ?? { sick_leaves: 12, earned_leaves: 15, wfh_days: 24 },
+    balances: balanceRows ?? [],
     leaves: leaves ?? [],
   })
 }
@@ -100,18 +103,19 @@ export async function POST(req: NextRequest) {
 
   if (isSick) {
     const { data: bal, error: balErr } = await admin
-      .from('leave_balance')
-      .select('sick_leaves')
+      .from('leave_balances')
+      .select('balance, allocated')
       .eq('user_id', userId)
-      .single()
-    console.log('[data POST] current sick_leaves:', bal?.sick_leaves, 'err:', balErr?.message)
-    if (bal) {
-      const { error: deductErr } = await admin
-        .from('leave_balance')
-        .update({ sick_leaves: Math.max(0, bal.sick_leaves - parseFloat(value)) })
-        .eq('user_id', userId)
-      console.log('[data POST] balance deduct err:', deductErr?.message)
-    }
+      .eq('leave_type', 'sick')
+      .maybeSingle()
+    console.log('[data POST] current sick balance:', (bal as any)?.balance, 'err:', balErr?.message)
+    const { error: deductErr } = await admin.from('leave_balances').upsert({
+      user_id: userId,
+      leave_type: 'sick',
+      allocated: (bal as any)?.allocated ?? 0,
+      balance: ((bal as any)?.balance ?? 0) - parseFloat(value),
+    })
+    console.log('[data POST] balance deduct err:', deductErr?.message)
   }
 
   const { data: dbUser } = await admin.from('users').select('name').eq('id', userId).single()
