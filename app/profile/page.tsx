@@ -13,13 +13,21 @@ const ROLES = [
 ]
 const LOCATIONS = ['Mumbai', 'Kolkata', 'Bangalore', 'Other']
 
-type Tab = 'profile' | 'leaves' | 'logs'
+type Tab = 'profile' | 'leaves' | 'logs' | 'reviews'
 
 type Leave = {
   id: string; type: string; date_from: string; date_to: string
   value: number; reason: string | null; status: string; rejection_reason: string | null
 }
 type EditState = { type: string; date_from: string; date_to: string; value: string; reason: string }
+
+type Review = {
+  id: string
+  date: string
+  type: string
+  created_at: string
+  employee_notes: string | null
+}
 
 const STATUS_STYLES: Record<string, string> = {
   pending: 'text-amber-600 bg-amber-50',
@@ -33,6 +41,16 @@ function fmt(d: string) {
 }
 function fmtShort(d: string) {
   return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+}
+function formatReviewDate(d: string) {
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+}
+function daysUntil(d: string) {
+  const diff = Math.ceil((new Date(d + 'T00:00:00').getTime() - new Date().getTime()) / 86400000)
+  if (diff === 0) return 'Today'
+  if (diff === 1) return 'Tomorrow'
+  if (diff < 0) return `${Math.abs(diff)} days ago`
+  return `In ${diff} days`
 }
 
 export default function ProfilePage() {
@@ -56,7 +74,19 @@ export default function ProfilePage() {
   // Logs tab
   const [allLeaves, setAllLeaves] = useState<Leave[]>([])
 
+  // Reviews tab
+  const [reviews, setReviews] = useState<Review[]>([])
+  const [noteEdits, setNoteEdits] = useState<Record<string, string>>({})
+  const [noteSaving, setNoteSaving] = useState<Record<string, boolean>>({})
+  const [noteSaved, setNoteSaved] = useState<Record<string, boolean>>({})
+
   const router = useRouter()
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const tab = params.get('tab') as Tab | null
+    if (tab && ['profile', 'leaves', 'logs', 'reviews'].includes(tab)) setActiveTab(tab)
+  }, [])
 
   async function loadLeaves(uid: string) {
     const today = new Date().toISOString().split('T')[0]
@@ -74,12 +104,25 @@ export default function ProfilePage() {
     setAllLeaves((all ?? []) as Leave[])
   }
 
+  async function loadReviews(uid: string) {
+    const { data } = await supabaseAdmin
+      .from('reviews')
+      .select('id, date, type, created_at, employee_notes')
+      .eq('user_id', uid)
+      .order('date', { ascending: true })
+    const rows = (data ?? []) as Review[]
+    setReviews(rows)
+    const edits: Record<string, string> = {}
+    for (const r of rows) edits[r.id] = r.employee_notes || ''
+    setNoteEdits(edits)
+  }
+
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) { router.push('/'); return }
       setUser(session.user)
 
-      const { data, error: dbErr } = await supabaseAdmin
+      const { data } = await supabaseAdmin
         .from('users').select('*').eq('email', session.user.email).single()
 
       if (data) {
@@ -91,7 +134,7 @@ export default function ProfilePage() {
           location: data.location || '',
           is_bd_associate: data.is_bd_associate || false,
         })
-        await loadLeaves(data.id)
+        await Promise.all([loadLeaves(data.id), loadReviews(data.id)])
       }
     })
   }, [])
@@ -137,12 +180,29 @@ export default function ProfilePage() {
     setLeaveSaving(false)
   }
 
+  async function saveNote(reviewId: string) {
+    setNoteSaving(prev => ({ ...prev, [reviewId]: true }))
+    await supabaseAdmin
+      .from('reviews')
+      .update({ employee_notes: noteEdits[reviewId] || null })
+      .eq('id', reviewId)
+      .eq('user_id', userId)
+    setNoteSaving(prev => ({ ...prev, [reviewId]: false }))
+    setNoteSaved(prev => ({ ...prev, [reviewId]: true }))
+    setTimeout(() => setNoteSaved(prev => ({ ...prev, [reviewId]: false })), 2000)
+  }
+
   if (!user) return null
+
+  const todayStr = new Date().toISOString().split('T')[0]
+  const reviewsUpcoming = reviews.filter(r => r.date >= todayStr)
+  const reviewsPast = [...reviews.filter(r => r.date < todayStr)].reverse()
 
   const TAB_LABELS: { key: Tab; label: string }[] = [
     { key: 'profile', label: 'Profile' },
     { key: 'leaves',  label: 'Leaves' },
     { key: 'logs',    label: 'Logs' },
+    { key: 'reviews', label: 'Reviews' },
   ]
 
   return (
@@ -354,6 +414,107 @@ export default function ProfilePage() {
           </div>
         )}
 
+        {/* Reviews Tab */}
+        {activeTab === 'reviews' && (
+          <div>
+            {reviews.length === 0 ? (
+              <p className="text-sm text-[#bbb] tracking-wider">No reviews scheduled.</p>
+            ) : (
+              <div className="space-y-10">
+                {reviewsUpcoming.length > 0 && (
+                  <div>
+                    <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-4">Upcoming</h3>
+                    <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
+                      {reviewsUpcoming.map(r => {
+                        const isDirty = noteEdits[r.id] !== (r.employee_notes || '')
+                        return (
+                          <div key={r.id} className="px-8 py-5">
+                            <div className="flex items-center justify-between mb-3">
+                              <div>
+                                <p className="text-xs tracking-[0.2em] uppercase text-[#1a1a1a]">{r.type} review</p>
+                                <p className="text-xs text-[#888] mt-1">{formatReviewDate(r.date)}</p>
+                              </div>
+                              <span className="text-xs tracking-wider uppercase px-3 py-1 text-amber-600 bg-amber-50">
+                                {daysUntil(r.date)}
+                              </span>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block">Your Notes</label>
+                              <textarea
+                                value={noteEdits[r.id] ?? ''}
+                                onChange={e => setNoteEdits(prev => ({ ...prev, [r.id]: e.target.value }))}
+                                placeholder="Add your notes from this review discussion…"
+                                rows={3}
+                                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none focus:border-[#aaa] resize-none"
+                              />
+                              <div className="flex items-center gap-3">
+                                <button
+                                  onClick={() => saveNote(r.id)}
+                                  disabled={noteSaving[r.id] || (!isDirty && !noteSaved[r.id])}
+                                  className="px-4 py-1.5 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-30"
+                                >
+                                  {noteSaving[r.id] ? 'Saving…' : 'Save'}
+                                </button>
+                                {noteSaved[r.id] && (
+                                  <span className="text-xs text-emerald-600 tracking-wider">Saved ✓</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+                {reviewsPast.length > 0 && (
+                  <div>
+                    <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-4">Past</h3>
+                    <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
+                      {reviewsPast.map(r => {
+                        const isDirty = noteEdits[r.id] !== (r.employee_notes || '')
+                        return (
+                          <div key={r.id} className="px-8 py-5">
+                            <div className="flex items-center justify-between mb-3">
+                              <div>
+                                <p className="text-xs tracking-[0.2em] uppercase text-[#888]">{r.type} review</p>
+                                <p className="text-xs text-[#bbb] mt-1">{formatReviewDate(r.date)}</p>
+                              </div>
+                              <span className="text-xs tracking-wider uppercase px-3 py-1 text-[#bbb] bg-[#f5f5f5]">
+                                Completed
+                              </span>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block">Your Notes</label>
+                              <textarea
+                                value={noteEdits[r.id] ?? ''}
+                                onChange={e => setNoteEdits(prev => ({ ...prev, [r.id]: e.target.value }))}
+                                placeholder="Add your notes from this review discussion…"
+                                rows={3}
+                                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none focus:border-[#aaa] resize-none"
+                              />
+                              <div className="flex items-center gap-3">
+                                <button
+                                  onClick={() => saveNote(r.id)}
+                                  disabled={noteSaving[r.id] || (!isDirty && !noteSaved[r.id])}
+                                  className="px-4 py-1.5 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-30"
+                                >
+                                  {noteSaving[r.id] ? 'Saving…' : 'Save'}
+                                </button>
+                                {noteSaved[r.id] && (
+                                  <span className="text-xs text-emerald-600 tracking-wider">Saved ✓</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </main>
   )
