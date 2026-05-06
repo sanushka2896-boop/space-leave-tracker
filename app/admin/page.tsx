@@ -103,6 +103,11 @@ export default function AdminPage() {
   const [otActingId, setOtActingId] = useState<string | null>(null)
   const [otRejectingId, setOtRejectingId] = useState<string | null>(null)
   const [otRejectReason, setOtRejectReason] = useState('')
+  const [deletingLeaveId, setDeletingLeaveId] = useState<string | null>(null)
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null)
+  const [teamEditForm, setTeamEditForm] = useState({ name: '', role: '', location: '', is_admin: false })
+  const [teamEditSaving, setTeamEditSaving] = useState(false)
+  const [deletingOTAdminId, setDeletingOTAdminId] = useState<string | null>(null)
 
   const router = useRouter()
 
@@ -459,6 +464,38 @@ export default function AdminPage() {
     setOtActingId(null)
   }
 
+  async function deleteLeave(id: string) {
+    setDeletingLeaveId(id)
+    await supabaseAdmin.from('leaves').delete().eq('id', id)
+    setDeletingLeaveId(null)
+    await loadData()
+  }
+
+  function startEditTeamMember(m: TeamMember) {
+    setEditingTeamId(m.id)
+    setTeamEditForm({ name: m.name || '', role: m.role || '', location: m.location || '', is_admin: m.is_admin })
+  }
+
+  async function saveTeamMember(id: string) {
+    setTeamEditSaving(true)
+    await supabaseAdmin.from('users').update({
+      name: teamEditForm.name || null,
+      role: teamEditForm.role || null,
+      location: teamEditForm.location || null,
+      is_admin: teamEditForm.is_admin,
+    }).eq('id', id)
+    setEditingTeamId(null)
+    await loadData()
+    setTeamEditSaving(false)
+  }
+
+  async function deleteOTEntry(id: string) {
+    setDeletingOTAdminId(id)
+    await supabaseAdmin.from('overtime_entries').delete().eq('id', id)
+    setDeletingOTAdminId(null)
+    await loadOvertimeEntries()
+  }
+
   if (loading) return null
 
   return (
@@ -530,6 +567,10 @@ export default function AdminPage() {
                                 className="px-3 py-1 border border-red-400 text-[9px] tracking-wider uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-40">
                                 Reject
                               </button>
+                              <button onClick={() => deleteOTEntry(e.id)} disabled={!!otActingId || deletingOTAdminId === e.id}
+                                className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">
+                                {deletingOTAdminId === e.id ? '…' : 'Delete'}
+                              </button>
                             </div>
                           )}
                         </td>
@@ -576,6 +617,13 @@ export default function AdminPage() {
                       className="px-5 py-2 border border-emerald-600 text-xs tracking-wider uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-40"
                     >
                       {acting === leave.id + 'approve' ? '…' : 'Approve'}
+                    </button>
+                    <button
+                      onClick={() => deleteLeave(leave.id)}
+                      disabled={acting !== null || deletingLeaveId === leave.id}
+                      className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40"
+                    >
+                      {deletingLeaveId === leave.id ? '…' : 'Delete'}
                     </button>
                     {rejectingId === leave.id ? (
                       <>
@@ -628,24 +676,71 @@ export default function AdminPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[#eee]">
-                  {['Name', 'Role', 'Location', 'Sick', 'Earned', 'WFH'].map(h => (
+                  {['Name', 'Role', 'Location', 'Sick', 'Earned', 'WFH', ''].map(h => (
                     <th key={h} className="px-6 py-3 text-left text-xs tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f5f5f5]">
                 {team.map(m => (
-                  <tr key={m.id}>
-                    <td className="px-6 py-4">
-                      <p className="text-xs text-[#1a1a1a]">{m.name || m.email}</p>
-                      {m.is_admin && <span className="text-[9px] tracking-wider uppercase text-[#aaa]">Admin</span>}
-                    </td>
-                    <td className="px-6 py-4 text-xs text-[#888]">{m.role || '—'}</td>
-                    <td className="px-6 py-4 text-xs text-[#888]">{m.location || '—'}</td>
-                    <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.sick_leaves}</td>
-                    <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.earned_leaves}</td>
-                    <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.wfh_days}</td>
-                  </tr>
+                  editingTeamId === m.id ? (
+                    <tr key={m.id} className="bg-[#fafafa]">
+                      <td colSpan={7} className="px-6 py-4">
+                        <div className="flex gap-3 flex-wrap items-end">
+                          <div>
+                            <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Name</label>
+                            <input type="text" value={teamEditForm.name}
+                              onChange={e => setTeamEditForm({ ...teamEditForm, name: e.target.value })}
+                              className="border border-[#ddd] bg-white px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none w-36" />
+                          </div>
+                          <div>
+                            <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Role</label>
+                            <input type="text" value={teamEditForm.role}
+                              onChange={e => setTeamEditForm({ ...teamEditForm, role: e.target.value })}
+                              className="border border-[#ddd] bg-white px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none w-32" />
+                          </div>
+                          <div>
+                            <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Location</label>
+                            <input type="text" value={teamEditForm.location}
+                              onChange={e => setTeamEditForm({ ...teamEditForm, location: e.target.value })}
+                              className="border border-[#ddd] bg-white px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none w-32" />
+                          </div>
+                          <div className="flex items-end gap-2 pb-0.5">
+                            <label className="text-[9px] uppercase tracking-wider text-[#aaa]">Admin</label>
+                            <input type="checkbox" checked={teamEditForm.is_admin}
+                              onChange={e => setTeamEditForm({ ...teamEditForm, is_admin: e.target.checked })}
+                              className="w-4 h-4 accent-[#1a1a1a] cursor-pointer" />
+                          </div>
+                          <button onClick={() => saveTeamMember(m.id)} disabled={teamEditSaving}
+                            className="px-4 py-1.5 border border-[#1a1a1a] text-xs tracking-wider uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                            {teamEditSaving ? '…' : 'Save'}
+                          </button>
+                          <button onClick={() => setEditingTeamId(null)}
+                            className="px-4 py-1.5 border border-[#ddd] text-xs uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer">
+                            Cancel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={m.id} className="hover:bg-[#fafafa]">
+                      <td className="px-6 py-4">
+                        <p className="text-xs text-[#1a1a1a]">{m.name || m.email}</p>
+                        {m.is_admin && <span className="text-[9px] tracking-wider uppercase text-[#aaa]">Admin</span>}
+                      </td>
+                      <td className="px-6 py-4 text-xs text-[#888]">{m.role || '—'}</td>
+                      <td className="px-6 py-4 text-xs text-[#888]">{m.location || '—'}</td>
+                      <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.sick_leaves}</td>
+                      <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.earned_leaves}</td>
+                      <td className="px-6 py-4 text-xs text-[#1a1a1a] font-light">{m.balance.wfh_days}</td>
+                      <td className="px-6 py-4">
+                        <button onClick={() => startEditTeamMember(m)}
+                          className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  )
                 ))}
               </tbody>
             </table>

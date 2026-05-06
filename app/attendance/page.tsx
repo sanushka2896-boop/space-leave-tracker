@@ -452,7 +452,7 @@ export default function AttendancePage() {
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          {!isAdmin && row.user_id === userId && (
+                          {(isAdmin || row.user_id === userId) && (
                             <button
                               onClick={() => deleteLateRow(row.id)}
                               disabled={deletingLateId === row.id}
@@ -586,7 +586,7 @@ export default function AttendancePage() {
                               <Th label="Reason" />
                               <Th label="Notes" />
                               <Th label="Status" />
-                              {!isAdmin && <th className="px-4 py-3 w-28" />}
+                              <th className="px-4 py-3 w-28" />
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-[#f5f5f5]">
@@ -697,33 +697,38 @@ export default function AttendancePage() {
                                       <span className="text-[9px] uppercase tracking-wider text-amber-600">Pending</span>
                                     )}
                                   </td>
-                                  {!isAdmin && (
-                                    <td className="px-4 py-3">
-                                      {!e.approved && !e.rejection_reason && (
-                                        <div className="flex gap-3">
-                                          <button
-                                            onClick={() => setEditingOT({
-                                              id: e.id, date: e.date,
-                                              login_time: e.login_time ?? '10:00',
-                                              logout_time: e.logout_time ?? '18:00',
-                                              extra_hours_start: e.extra_hours_start ?? '',
-                                              extra_hours_end: e.extra_hours_end ?? '',
-                                              reason: e.reason ?? '',
-                                              compensated_by: e.compensated_by ?? '',
-                                            })}
-                                            className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
-                                            Modify
-                                          </button>
-                                          <button
-                                            onClick={() => deleteOT(e.id)}
-                                            disabled={deletingOTId === e.id}
-                                            className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">
-                                            {deletingOTId === e.id ? '…' : 'Delete'}
-                                          </button>
-                                        </div>
-                                      )}
-                                    </td>
-                                  )}
+                                  <td className="px-4 py-3">
+                                    {isAdmin ? (
+                                      <button
+                                        onClick={() => deleteOT(e.id)}
+                                        disabled={deletingOTId === e.id}
+                                        className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">
+                                        {deletingOTId === e.id ? '…' : 'Delete'}
+                                      </button>
+                                    ) : !e.approved && !e.rejection_reason ? (
+                                      <div className="flex gap-3">
+                                        <button
+                                          onClick={() => setEditingOT({
+                                            id: e.id, date: e.date,
+                                            login_time: e.login_time ?? '10:00',
+                                            logout_time: e.logout_time ?? '18:00',
+                                            extra_hours_start: e.extra_hours_start ?? '',
+                                            extra_hours_end: e.extra_hours_end ?? '',
+                                            reason: e.reason ?? '',
+                                            compensated_by: e.compensated_by ?? '',
+                                          })}
+                                          className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
+                                          Modify
+                                        </button>
+                                        <button
+                                          onClick={() => deleteOT(e.id)}
+                                          disabled={deletingOTId === e.id}
+                                          className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">
+                                          {deletingOTId === e.id ? '…' : 'Delete'}
+                                        </button>
+                                      </div>
+                                    ) : null}
+                                  </td>
                                 </tr>
                               )
                             ))}
