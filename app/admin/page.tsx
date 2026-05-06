@@ -89,7 +89,7 @@ export default function AdminPage() {
   const [rError, setRError] = useState('')
   const [rEditId, setREditId] = useState<string | null>(null)
 
-  const [aForm, setAForm] = useState({ user_id: '', type: 'casual', date_from: '', date_to: '', value: '1' })
+  const [aForm, setAForm] = useState({ user_id: '', type: 'casual', date_from: '', date_to: '', note: '' })
   const [aSaving, setASaving] = useState(false)
   const [aError, setAError] = useState('')
 
@@ -299,19 +299,34 @@ export default function AdminPage() {
     setRError('')
   }
 
+  function calcWorkingDays(from: string, to: string): number {
+    const start = new Date(from + 'T00:00:00')
+    const end = new Date(to + 'T00:00:00')
+    if (start > end) return 0
+    let count = 0
+    const cur = new Date(start)
+    while (cur <= end) {
+      if (cur.getDay() !== 0) count++ // Sundays excluded; Saturdays count
+      cur.setDate(cur.getDate() + 1)
+    }
+    return count
+  }
+
   async function assignLeave() {
     if (!aForm.user_id || !aForm.date_from) return
     setAError('')
     setASaving(true)
-    const value = parseFloat(aForm.value)
+    const dateTo = aForm.date_to || aForm.date_from
+    const value = calcWorkingDays(aForm.date_from, dateTo)
+
     const { error: insertErr } = await supabaseAdmin.from('leaves').insert({
       user_id: aForm.user_id,
       type: aForm.type,
       date_from: aForm.date_from,
-      date_to: aForm.date_to || aForm.date_from,
+      date_to: dateTo,
       value,
       status: 'approved',
-      reason: 'Assigned by admin',
+      reason: aForm.note || 'Assigned by admin',
     })
     if (insertErr) { setAError(insertErr.message); setASaving(false); return }
 
@@ -329,7 +344,7 @@ export default function AdminPage() {
       year: new Date().getFullYear(),
     })
 
-    setAForm({ user_id: '', type: 'casual', date_from: '', date_to: '', value: '1' })
+    setAForm({ user_id: '', type: 'casual', date_from: '', date_to: '', note: '' })
     await loadData()
     setASaving(false)
   }
@@ -605,8 +620,8 @@ export default function AdminPage() {
                 {team.map(m => {
                   const getBalance = (type: string) => {
                     const b = m.balances.find(b => b.leave_type === type)
-                    if (!b) return <span className="text-[#ccc]">—</span>
-                    return <span className={b.balance < 0 ? 'text-red-500' : ''}>{b.balance}</span>
+                    if (!b) return <span className="text-[#bbb]">—</span>
+                    return <span className={b.balance < 0 ? 'text-red-500' : 'text-[#1a1a1a]'}>{b.balance}</span>
                   }
                   return editingTeamId === m.id ? (
                     <tr key={m.id} className="bg-[#fafafa]">
@@ -765,33 +780,36 @@ export default function AdminPage() {
         <section>
           <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">Assign Leave</h3>
           <div className="border border-[#ddd] bg-white p-6 max-w-xl space-y-4">
-            <p className="text-xs text-[#bbb] tracking-wider">Leave is saved as approved and balance is deducted immediately.</p>
+            <p className="text-xs text-[#bbb] tracking-wider">Saved as approved immediately. Balance deducted. Appears on employee dashboard and calendar.</p>
+            <div>
+              <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Employee</label>
+              <select
+                value={aForm.user_id}
+                onChange={e => setAForm({ ...aForm, user_id: e.target.value })}
+                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
+              >
+                <option value="">Select employee</option>
+                {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email}{m.role ? ` — ${m.role}` : ''}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Leave Type</label>
+              <select
+                value={aForm.type}
+                onChange={e => setAForm({ ...aForm, type: e.target.value })}
+                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
+              >
+                <option value="casual">Casual Leave</option>
+                <option value="sick">Sick Leave</option>
+                <option value="wfh">WFH</option>
+                <option value="maternity">Maternity Leave</option>
+                <option value="miscarriage">Miscarriage Leave</option>
+                <option value="sabbatical">Sabbatical</option>
+              </select>
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Employee</label>
-                <select
-                  value={aForm.user_id}
-                  onChange={e => setAForm({ ...aForm, user_id: e.target.value })}
-                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
-                >
-                  <option value="">Select employee</option>
-                  {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Leave Type</label>
-                <select
-                  value={aForm.type}
-                  onChange={e => setAForm({ ...aForm, type: e.target.value })}
-                  className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none"
-                >
-                  {leaveTypes.filter(lt => lt.is_active).map(lt => (
-                    <option key={lt.key} value={lt.key}>{lt.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">From</label>
+                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Date From</label>
                 <input
                   type="date"
                   value={aForm.date_from}
@@ -800,7 +818,7 @@ export default function AdminPage() {
                 />
               </div>
               <div>
-                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">To</label>
+                <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Date To</label>
                 <input
                   type="date"
                   value={aForm.date_to}
@@ -809,16 +827,20 @@ export default function AdminPage() {
                 />
               </div>
             </div>
+            {aForm.date_from && (
+              <p className="text-[10px] text-[#aaa] tracking-wider">
+                Duration: {calcWorkingDays(aForm.date_from, aForm.date_to || aForm.date_from)} working day{calcWorkingDays(aForm.date_from, aForm.date_to || aForm.date_from) !== 1 ? 's' : ''} (Sundays excluded)
+              </p>
+            )}
             <div>
-              <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Duration</label>
-              <select
-                value={aForm.value}
-                onChange={e => setAForm({ ...aForm, value: e.target.value })}
-                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none"
-              >
-                <option value="1">Full Day</option>
-                <option value="0.5">Half Day</option>
-              </select>
+              <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Note</label>
+              <input
+                type="text"
+                placeholder="Optional note"
+                value={aForm.note}
+                onChange={e => setAForm({ ...aForm, note: e.target.value })}
+                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
+              />
             </div>
             {aError && <p className="text-xs text-red-400">{aError}</p>}
             <button
