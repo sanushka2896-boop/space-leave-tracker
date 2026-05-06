@@ -14,13 +14,20 @@ type BalanceItem = { remaining: number; taken: number; scheduled: number }
 type TeamPerson = { name: string; type: string; date_from: string; date_to: string }
 type ClockLog = { id: string; user_id: string; date: string; clock_in: string | null; clock_out: string | null; users?: { name: string } | null }
 
-function localDateStr() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-}
-function nowTime() {
-  const n = new Date()
-  return `${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}:${String(n.getSeconds()).padStart(2,'0')}`
+/** Returns current date and time in Asia/Kolkata (IST) */
+function getISTNow(): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00'
+  const h = get('hour') === '24' ? '00' : get('hour')
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    time: `${h}:${get('minute')}:${get('second')}`,
+  }
 }
 function fmtTime(t: string | null) {
   if (!t) return '—'
@@ -29,7 +36,7 @@ function fmtTime(t: string | null) {
   const ampm = h >= 12 ? 'PM' : 'AM'
   return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
 }
-function timeHHMM(t: string) { return t.slice(0, 5) }
+function hhMM(t: string) { return t.slice(0, 5) }
 function minutesDiff(a: string, b: string) {
   const [ah, am] = a.split(':').map(Number)
   const [bh, bm] = b.split(':').map(Number)
@@ -84,7 +91,7 @@ export default function Dashboard() {
   const router = useRouter()
 
   async function loadClockData(uid: string, adminFlag: boolean) {
-    const today = localDateStr()
+    const { date: today } = getISTNow()
     const { data: myLogArr, error } = await supabaseAdmin
       .from('clock_logs').select('*').eq('user_id', uid).eq('date', today).limit(1)
     if (error) console.error('[Clock] loadClockData error:', error)
@@ -99,10 +106,9 @@ export default function Dashboard() {
   async function clockIn(uid: string, adminFlag: boolean) {
     setClockAction(true)
     setClockError('')
-    const today = localDateStr()
-    const t = nowTime()
-    const hhMM = timeHHMM(t)
-    console.log('[Clock] clockIn uid:', uid, 'date:', today, 'time:', t)
+    const { date: today, time: t } = getISTNow()
+    const hm = hhMM(t)
+    console.log('[Clock] clockIn IST — uid:', uid, 'date:', today, 'time:', t)
     const { data, error } = await supabaseAdmin.from('clock_logs')
       .insert({ user_id: uid, date: today, clock_in: t })
       .select().limit(1)
@@ -112,11 +118,11 @@ export default function Dashboard() {
       setClockAction(false)
       return
     }
-    // auto late arrival only if strictly after 10:15
-    if (hhMM > '10:15') {
-      const minLate = minutesDiff('10:00', hhMM)
+    // auto late arrival only if strictly after 10:15 IST
+    if (hm > '10:15') {
+      const minLate = minutesDiff('10:00', hm)
       const { error: laErr } = await supabaseAdmin.from('late_arrivals').upsert(
-        { user_id: uid, date: today, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'pending' },
+        { user_id: uid, date: today, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'Pending', approved: false },
         { onConflict: 'user_id,date' }
       )
       if (laErr) console.error('[Clock] late_arrivals upsert error:', laErr)
@@ -128,10 +134,9 @@ export default function Dashboard() {
   async function clockOut(uid: string, adminFlag: boolean) {
     setClockAction(true)
     setClockError('')
-    const today = localDateStr()
-    const t = nowTime()
-    const hhMM = timeHHMM(t)
-    console.log('[Clock] clockOut uid:', uid, 'date:', today, 'time:', t)
+    const { date: today, time: t } = getISTNow()
+    const hm = hhMM(t)
+    console.log('[Clock] clockOut IST — uid:', uid, 'date:', today, 'time:', t)
     const { error } = await supabaseAdmin.from('clock_logs')
       .update({ clock_out: t }).eq('user_id', uid).eq('date', today)
     console.log('[Clock] clockOut result:', { error })
@@ -140,8 +145,8 @@ export default function Dashboard() {
       setClockAction(false)
       return
     }
-    // update minutes_missed on late_arrivals row if one exists for today
-    const missed = hhMM < '18:00' ? minutesDiff(hhMM, '18:00') : 0
+    // update departure_time + minutes_missed on late_arrivals row if one exists today
+    const missed = hm < '18:00' ? minutesDiff(hm, '18:00') : 0
     await supabaseAdmin.from('late_arrivals')
       .update({ departure_time: t, minutes_missed: missed })
       .eq('user_id', uid).eq('date', today)
@@ -151,7 +156,7 @@ export default function Dashboard() {
 
   async function loadData(uid: string) {
     const today = new Date()
-    const todayStr = toDateStr(today)
+    const todayStr = getISTNow().date // IST date
     const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1)
     const tomorrowStr = toDateStr(tomorrow)
     const nwStart = new Date(today); nwStart.setDate(today.getDate() + 7)
@@ -299,11 +304,11 @@ export default function Dashboard() {
                   <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock Out</span>
                   <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_out ?? null)}</p>
                 </div>
-                {todayClock?.clock_in && timeHHMM(todayClock.clock_in) > '10:15' && (
+                {todayClock?.clock_in && hhMM(todayClock.clock_in) > '10:15' && (
                   <div>
                     <span className="text-[9px] text-amber-600 uppercase tracking-wider">Late</span>
                     <p className="text-sm font-light text-amber-600 mt-0.5">
-                      +{minutesDiff('10:00', timeHHMM(todayClock.clock_in))}m
+                      +{minutesDiff('10:00', hhMM(todayClock.clock_in))}m
                     </p>
                   </div>
                 )}
@@ -341,7 +346,7 @@ export default function Dashboard() {
                 </thead>
                 <tbody className="divide-y divide-[#f5f5f5]">
                   {allClockLogs.map(log => {
-                    const late = log.clock_in && log.clock_in > '10:15'
+                    const late = log.clock_in && hhMM(log.clock_in) > '10:15'
                     return (
                       <tr key={log.id} className="hover:bg-[#fafafa]">
                         <td className="px-6 py-3 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>
@@ -351,7 +356,7 @@ export default function Dashboard() {
                           {!log.clock_in ? (
                             <span className="text-[9px] uppercase tracking-wider text-[#ccc]">Absent</span>
                           ) : late ? (
-                            <span className="text-[9px] uppercase tracking-wider text-amber-600">Late {minutesDiff('10:00', log.clock_in)}m</span>
+                            <span className="text-[9px] uppercase tracking-wider text-amber-600">Late {minutesDiff('10:00', hhMM(log.clock_in!))}m</span>
                           ) : (
                             <span className="text-[9px] uppercase tracking-wider text-emerald-600">On time</span>
                           )}
