@@ -199,14 +199,52 @@ export default function Dashboard() {
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
+      console.log('[Dashboard] getSession result — session:', session ? `uid=${session.user.id} email=${session.user.email}` : 'null')
       if (!session) { router.push('/'); return }
       setUser(session.user)
-      const { data: dbUser } = await supabaseAdmin.from('users').select('id, is_admin').eq('email', session.user.email).single()
-      if (!dbUser) { router.push('/'); return }
-      setUserId(dbUser.id)
-      const adminFlag = dbUser.is_admin === true
+
+      // Look up the user row — use maybeSingle so a missing row returns null instead of throwing
+      console.log('[Dashboard] looking up users row for email:', session.user.email)
+      const { data: dbUser, error: dbUserErr } = await supabaseAdmin
+        .from('users').select('id, is_admin').eq('email', session.user.email).maybeSingle()
+      console.log('[Dashboard] users lookup result — data:', dbUser, 'error:', dbUserErr)
+
+      let resolvedUser = dbUser
+
+      if (!dbUser) {
+        // First login — create the user row automatically
+        const newName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'New User'
+        console.log('[Dashboard] no users row found — creating new user. email:', session.user.email, 'name:', newName)
+
+        const { data: created, error: createErr } = await supabaseAdmin
+          .from('users')
+          .insert({ email: session.user.email, name: newName, is_admin: false })
+          .select('id, is_admin')
+          .single()
+        console.log('[Dashboard] users insert result — data:', created, 'error:', createErr)
+
+        if (createErr || !created) {
+          console.error('[Dashboard] failed to create user row — cannot continue:', createErr)
+          return
+        }
+
+        resolvedUser = created
+
+        // Seed leave_balance for the new user
+        console.log('[Dashboard] seeding leave_balance for new user id:', created.id)
+        const { error: balErr } = await supabaseAdmin
+          .from('leave_balance')
+          .insert({ user_id: created.id, sick_leaves: 12, earned_leaves: 15, wfh_days: 24 })
+        console.log('[Dashboard] leave_balance insert result — error:', balErr)
+      }
+
+      console.log('[Dashboard] resolved user:', resolvedUser)
+      if (!resolvedUser) return
+      setUserId(resolvedUser.id)
+      const adminFlag = resolvedUser.is_admin === true
       setIsAdmin(adminFlag)
-      await Promise.all([loadData(dbUser.id), loadClockData(dbUser.id, adminFlag)])
+      console.log('[Dashboard] loading dashboard data for user id:', resolvedUser.id, 'isAdmin:', adminFlag)
+      await Promise.all([loadData(resolvedUser.id), loadClockData(resolvedUser.id, adminFlag)])
     })
   }, [])
 
