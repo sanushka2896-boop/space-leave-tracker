@@ -357,7 +357,7 @@ export default function AttendancePage() {
                     <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Employee</label>
                     <select value={addLate.user_id}
                       onChange={e => setAddLate({ ...addLate, user_id: e.target.value })}
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none">
+                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none">
                       <option value="">Select…</option>
                       {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
                     </select>
@@ -366,7 +366,7 @@ export default function AttendancePage() {
                     <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Date</label>
                     <input type="date" value={addLate.date}
                       onChange={e => setAddLate({ ...addLate, date: e.target.value })}
-                      className="border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                      className="border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                   </div>
                   <div>
                     <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">
@@ -379,14 +379,14 @@ export default function AttendancePage() {
                     </label>
                     <input type="time" value={addLate.arrival_time}
                       onChange={e => setAddLate({ ...addLate, arrival_time: e.target.value })}
-                      className="border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                      className="border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                   </div>
                   <div className="min-w-[120px] flex-1">
                     <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Reason</label>
                     <input type="text" value={addLate.reason}
                       onChange={e => setAddLate({ ...addLate, reason: e.target.value })}
                       placeholder="Optional"
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                   </div>
                   <button onClick={addLateRow} disabled={addLateSaving}
                     className="px-5 py-2 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40 shrink-0">
@@ -432,7 +432,7 @@ export default function AttendancePage() {
                               onChange={e => setLateNotesEdit(prev => ({ ...prev, [row.id]: e.target.value }))}
                               onBlur={() => saveLateNotes(row.id)}
                               placeholder="Add note…"
-                              className="border border-[#ddd] bg-white px-2 py-1 text-xs focus:outline-none w-36"
+                              className="border border-[#ddd] bg-white px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none w-36"
                             />
                           ) : (
                             <span className="text-xs text-[#888]">{row.notes || '—'}</span>
@@ -482,7 +482,7 @@ export default function AttendancePage() {
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Date</label>
                   <input type="date" value={otForm.date}
                     onChange={e => setOtForm({ ...otForm, date: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                 </div>
                 <div>
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Day</label>
@@ -497,13 +497,13 @@ export default function AttendancePage() {
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Login Time</label>
                   <input type="time" value={otForm.login_time}
                     onChange={e => setOtForm({ ...otForm, login_time: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                 </div>
                 <div className="col-span-2">
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Logout Time</label>
                   <input type="time" value={otForm.logout_time}
                     onChange={e => setOtForm({ ...otForm, logout_time: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                 </div>
                 <div className="col-span-2">
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Overtime (auto)</label>
@@ -518,13 +518,13 @@ export default function AttendancePage() {
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Extra Hours — Start</label>
                   <input type="time" value={otForm.extra_hours_start}
                     onChange={e => setOtForm({ ...otForm, extra_hours_start: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                 </div>
                 <div className="col-span-2">
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Extra Hours — End</label>
                   <input type="time" value={otForm.extra_hours_end}
                     onChange={e => setOtForm({ ...otForm, extra_hours_end: e.target.value })}
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                 </div>
                 {otForm.extra_hours_start && otForm.extra_hours_end && (
                   <div className="col-span-2 flex items-end pb-2">
@@ -539,14 +539,14 @@ export default function AttendancePage() {
                   <input type="text" value={otForm.reason}
                     onChange={e => setOtForm({ ...otForm, reason: e.target.value })}
                     placeholder="Why overtime?"
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                 </div>
                 <div>
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Notes / Compensation</label>
                   <input type="text" value={otForm.compensated_by}
                     onChange={e => setOtForm({ ...otForm, compensated_by: e.target.value })}
                     placeholder="e.g. Early leave on 7 May"
-                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
                 </div>
               </div>
 
@@ -599,19 +599,19 @@ export default function AttendancePage() {
                                         <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Date</label>
                                         <input type="date" value={editingOT.date}
                                           onChange={ev => setEditingOT({ ...editingOT, date: ev.target.value })}
-                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs focus:outline-none" />
+                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
                                       </div>
                                       <div>
                                         <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Login</label>
                                         <input type="time" value={editingOT.login_time}
                                           onChange={ev => setEditingOT({ ...editingOT, login_time: ev.target.value })}
-                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs focus:outline-none" />
+                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
                                       </div>
                                       <div>
                                         <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Logout</label>
                                         <input type="time" value={editingOT.logout_time}
                                           onChange={ev => setEditingOT({ ...editingOT, logout_time: ev.target.value })}
-                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs focus:outline-none" />
+                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
                                       </div>
                                       <div>
                                         <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Overtime (auto)</label>
@@ -625,25 +625,25 @@ export default function AttendancePage() {
                                         <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Extra Hours Start</label>
                                         <input type="time" value={editingOT.extra_hours_start}
                                           onChange={ev => setEditingOT({ ...editingOT, extra_hours_start: ev.target.value })}
-                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs focus:outline-none" />
+                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
                                       </div>
                                       <div>
                                         <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Extra Hours End</label>
                                         <input type="time" value={editingOT.extra_hours_end}
                                           onChange={ev => setEditingOT({ ...editingOT, extra_hours_end: ev.target.value })}
-                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs focus:outline-none" />
+                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
                                       </div>
                                       <div>
                                         <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Reason</label>
                                         <input type="text" value={editingOT.reason}
                                           onChange={ev => setEditingOT({ ...editingOT, reason: ev.target.value })}
-                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs focus:outline-none" />
+                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
                                       </div>
                                       <div>
                                         <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">Notes</label>
                                         <input type="text" value={editingOT.compensated_by}
                                           onChange={ev => setEditingOT({ ...editingOT, compensated_by: ev.target.value })}
-                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs focus:outline-none" />
+                                          className="w-full border border-[#ddd] bg-white px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
                                       </div>
                                     </div>
                                     {editOTErr && <p className="text-xs text-red-400 mb-2">{editOTErr}</p>}
@@ -679,7 +679,7 @@ export default function AttendancePage() {
                                       onChange={ev => setOtNotesEdit(prev => ({ ...prev, [e.id]: ev.target.value }))}
                                       onBlur={() => saveOTNotes(e.id)}
                                       placeholder="Add note…"
-                                      className="border border-[#ddd] bg-white px-2 py-1 text-xs focus:outline-none w-32"
+                                      className="border border-[#ddd] bg-white px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none w-32"
                                     />
                                   </td>
                                   <td className="px-4 py-3">

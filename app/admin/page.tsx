@@ -512,7 +512,7 @@ export default function AdminPage() {
                                   if (ev.key === 'Escape') { setOtRejectingId(null); setOtRejectReason('') }
                                 }}
                                 autoFocus
-                                className="border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs focus:outline-none w-40" />
+                                className="border border-[#ddd] bg-[#F5F2EE] px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none w-40" />
                               <button
                                 onClick={() => rejectOvertime(e, otRejectReason)}
                                 disabled={!!otActingId || !otRejectReason.trim()}
