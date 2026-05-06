@@ -46,7 +46,7 @@ type OvertimeEntry = {
   date: string
   login_time: string | null
   logout_time: string | null
-  overtime_minutes: number | null
+  overtime_duration: string | null
   extra_hours_start: string | null
   extra_hours_end: string | null
   reason: string | null
@@ -495,7 +495,7 @@ export default function AdminPage() {
                         <td className="px-4 py-3 text-xs text-[#888]">{dow}</td>
                         <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.login_time)}</td>
                         <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.logout_time)}</td>
-                        <td className="px-4 py-3 text-xs font-medium text-[#1a1a1a]">{minutesToHM(e.overtime_minutes)}</td>
+                        <td className="px-4 py-3 text-xs font-medium text-[#1a1a1a]">{e.overtime_duration || '—'}</td>
                         <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">
                           {e.extra_hours_start && e.extra_hours_end
                             ? `${fmtTime(e.extra_hours_start)} – ${fmtTime(e.extra_hours_end)}` : '—'}

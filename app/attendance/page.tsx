@@ -23,7 +23,7 @@ type OvertimeEntry = {
   date: string
   login_time: string | null
   logout_time: string | null
-  overtime_minutes: number | null
+  overtime_duration: string | null
   extra_hours_start: string | null
   extra_hours_end: string | null
   reason: string | null
@@ -51,17 +51,14 @@ function fmtTime(t: string | null) {
 function dayAbbr(d: string) { return d ? DAY_ABBR[new Date(d + 'T00:00:00').getDay()] : '' }
 function dayFull(d: string) { return d ? DAY_FULL[new Date(d + 'T00:00:00').getDay()] : '' }
 
-function calcOvertimeMins(logout: string): number {
+function calcOvertimeDuration(logout: string): string | null {
   const [h, m] = logout.split(':').map(Number)
-  return Math.max(0, h * 60 + m - 18 * 60)
-}
-
-function minsToLabel(mins: number | null): string {
-  if (!mins || mins <= 0) return '—'
-  const h = Math.floor(mins / 60), m = mins % 60
-  if (h === 0) return `${m} min${m !== 1 ? 's' : ''}`
-  if (m === 0) return `${h} hr${h !== 1 ? 's' : ''}`
-  return `${h} hr ${m} min${m !== 1 ? 's' : ''}`
+  const mins = Math.max(0, h * 60 + m - 18 * 60)
+  if (mins <= 0) return null
+  const hr = Math.floor(mins / 60), mn = mins % 60
+  if (hr === 0) return `${mn} min${mn !== 1 ? 's' : ''}`
+  if (mn === 0) return `${hr} hr${hr !== 1 ? 's' : ''}`
+  return `${hr} hr ${mn} min${mn !== 1 ? 's' : ''}`
 }
 
 function minsLateFrom10(t: string): number {
@@ -146,19 +143,23 @@ export default function AttendancePage() {
     }
     setAddLateErr('')
     setAddLateSaving(true)
+    const { data: existing } = await supabaseAdmin
+      .from('late_arrivals').select('id').eq('user_id', addLate.user_id).eq('date', addLate.date).maybeSingle()
+    if (existing) {
+      setAddLateErr('Late arrival already logged for this date.')
+      setAddLateSaving(false)
+      return
+    }
     const minLate = minsLateFrom10(addLate.arrival_time)
-    const { error } = await supabaseAdmin.from('late_arrivals').upsert(
-      {
-        user_id: addLate.user_id,
-        date: addLate.date,
-        arrival_time: addLate.arrival_time,
-        minutes_late: minLate,
-        reason: addLate.reason || null,
-        pto_deduction_status: 'Pending',
-        approved: false,
-      },
-      { onConflict: 'user_id,date' }
-    )
+    const { error } = await supabaseAdmin.from('late_arrivals').insert({
+      user_id: addLate.user_id,
+      date: addLate.date,
+      arrival_time: addLate.arrival_time,
+      minutes_late: minLate,
+      reason: addLate.reason || null,
+      pto_deduction_status: 'Pending',
+      approved: false,
+    })
     if (error) { setAddLateErr(error.message); setAddLateSaving(false); return }
     setAddLate({ user_id: '', date: '', arrival_time: '', reason: '' })
     await loadLate()
@@ -186,13 +187,12 @@ export default function AttendancePage() {
     }
     setOtErr('')
     setOtSaving(true)
-    const overtime_minutes = calcOvertimeMins(otForm.logout_time)
     const { error } = await supabaseAdmin.from('overtime_entries').insert({
       user_id: userId,
       date: otForm.date,
       login_time: otForm.login_time,
       logout_time: otForm.logout_time,
-      overtime_minutes,
+      overtime_duration: calcOvertimeDuration(otForm.logout_time),
       extra_hours_start: otForm.extra_hours_start || null,
       extra_hours_end: otForm.extra_hours_end || null,
       reason: otForm.reason || null,
@@ -205,6 +205,11 @@ export default function AttendancePage() {
     setOtSaving(false)
   }
 
+  async function updateOTNotes(id: string, notes: string) {
+    await supabaseAdmin.from('overtime_entries').update({ compensated_by: notes || null }).eq('id', id)
+    await loadOvertime(userId)
+  }
+
   function groupByMonth(entries: OvertimeEntry[]) {
     const groups: Record<string, OvertimeEntry[]> = {}
     for (const e of entries) {
@@ -215,7 +220,7 @@ export default function AttendancePage() {
     return groups
   }
 
-  const previewOT = otForm.logout_time ? calcOvertimeMins(otForm.logout_time) : null
+  const previewOT = otForm.logout_time ? calcOvertimeDuration(otForm.logout_time) : null
 
   if (loading) return null
 
@@ -402,7 +407,7 @@ export default function AttendancePage() {
                 <div className="col-span-2">
                   <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Overtime Time (auto)</label>
                   <div className="border border-[#eee] bg-[#f8f6f3] px-3 py-2 text-xs text-[#1a1a1a] font-medium h-[33px]">
-                    {previewOT !== null && previewOT > 0 ? minsToLabel(previewOT) : '—'}
+                    {previewOT ?? '—'}
                   </div>
                 </div>
               </div>
@@ -440,7 +445,7 @@ export default function AttendancePage() {
                     className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
                 </div>
                 <div>
-                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Compensated by Equal Time-Off Next Day</label>
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Notes / Compensation</label>
                   <input type="text" value={otForm.compensated_by}
                     onChange={e => setOtForm({ ...otForm, compensated_by: e.target.value })}
                     placeholder="e.g. Early leave on 7 May"
@@ -481,7 +486,7 @@ export default function AttendancePage() {
                               <Th label="Overtime Time" />
                               <Th label="Extra Hours Logged-in" />
                               <Th label="Reason for Extra Hours" />
-                              <Th label="Compensated by Time-Off" />
+                              <Th label="Notes / Compensation" />
                               <Th label="Approved" />
                               <Th label="Approved By" />
                             </tr>
@@ -494,14 +499,23 @@ export default function AttendancePage() {
                                 <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{fmtTime(e.login_time)}</td>
                                 <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{fmtTime(e.logout_time)}</td>
                                 <td className="px-4 py-3 text-xs text-[#1a1a1a] font-medium whitespace-nowrap">
-                                  {minsToLabel(e.overtime_minutes)}
+                                  {e.overtime_duration || '—'}
                                 </td>
                                 <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">
                                   {e.extra_hours_start && e.extra_hours_end
                                     ? `${fmtTime(e.extra_hours_start)} – ${fmtTime(e.extra_hours_end)}` : '—'}
                                 </td>
                                 <td className="px-4 py-3 text-xs text-[#888] max-w-[140px]">{e.reason || '—'}</td>
-                                <td className="px-4 py-3 text-xs text-[#888] max-w-[140px]">{e.compensated_by || '—'}</td>
+                                <td className="px-4 py-3 text-xs text-[#888]">
+                                  <input type="text"
+                                    defaultValue={e.compensated_by ?? ''}
+                                    onBlur={ev => {
+                                      if (ev.target.value !== (e.compensated_by ?? ''))
+                                        updateOTNotes(e.id, ev.target.value)
+                                    }}
+                                    placeholder="Add note…"
+                                    className="border border-[#ddd] bg-white px-2 py-1 text-xs focus:outline-none w-36" />
+                                </td>
                                 <td className="px-4 py-3">
                                   <div className={`w-4 h-4 border flex items-center justify-center ${e.approved ? 'bg-emerald-500 border-emerald-500' : 'border-[#ddd]'}`}>
                                     {e.approved && <span className="text-white text-[8px] leading-none">✓</span>}

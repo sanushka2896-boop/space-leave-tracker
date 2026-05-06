@@ -115,11 +115,14 @@ export default function Dashboard() {
     }
     if (t > '10:15') {
       const minLate = minutesDiff('10:00', t)
-      const { error: laErr } = await supabaseAdmin.from('late_arrivals').upsert(
-        { user_id: uid, date: today, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'Pending', approved: false },
-        { onConflict: 'user_id,date' }
-      )
-      if (laErr) console.error('[Clock] late_arrivals upsert error:', laErr)
+      const { data: existing } = await supabaseAdmin
+        .from('late_arrivals').select('id').eq('user_id', uid).eq('date', today).maybeSingle()
+      if (!existing) {
+        const { error: laErr } = await supabaseAdmin.from('late_arrivals').insert(
+          { user_id: uid, date: today, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'Pending', approved: false }
+        )
+        if (laErr) console.error('[Clock] late_arrivals insert error:', laErr)
+      }
     }
     await loadClockData(uid, adminFlag)
     setClockAction(false)
