@@ -480,7 +480,7 @@ export default function AdminPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-[#eee]">
-                    {['Employee', 'Date', 'Day', 'Login', 'Logout', 'OT Time', 'Extra Hours', 'Reason', 'Compensated By', ''].map(h => (
+                    {['Date', 'Day', 'Name', 'Login', 'Logout', 'Overtime', 'Extra Hours', 'Reason', 'Notes', ''].map(h => (
                       <th key={h} className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -490,9 +490,9 @@ export default function AdminPage() {
                     const dow = e.date ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(e.date+'T00:00:00').getDay()] : '—'
                     return (
                       <tr key={e.id} className="hover:bg-[#fafafa]">
-                        <td className="px-4 py-3 text-xs text-[#1a1a1a]">{(e.users as any)?.name || '—'}</td>
                         <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(e.date)}</td>
                         <td className="px-4 py-3 text-xs text-[#888]">{dow}</td>
+                        <td className="px-4 py-3 text-xs text-[#1a1a1a]">{(e.users as any)?.name || '—'}</td>
                         <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.login_time)}</td>
                         <td className="px-4 py-3 text-xs text-[#888]">{fmtTime(e.logout_time)}</td>
                         <td className="px-4 py-3 text-xs font-medium text-[#1a1a1a]">{e.overtime_duration || '—'}</td>

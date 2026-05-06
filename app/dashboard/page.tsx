@@ -99,6 +99,20 @@ export default function Dashboard() {
     }
   }
 
+  async function deleteClockIn(uid: string, adminFlag: boolean) {
+    if (!todayClock) return
+    setClockAction(true)
+    setClockError('')
+    const { error } = await supabaseAdmin.from('clock_logs').delete().eq('id', todayClock.id)
+    if (error) {
+      setClockError(`Delete failed: ${error.message}`)
+      setClockAction(false)
+      return
+    }
+    await loadClockData(uid, adminFlag)
+    setClockAction(false)
+  }
+
   async function clockIn(uid: string, adminFlag: boolean) {
     setClockAction(true)
     setClockError('')
@@ -269,29 +283,43 @@ export default function Dashboard() {
           <div className="border border-[#ddd] bg-white px-8 py-5 flex items-center justify-between">
             <div>
               <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-2">Today's Attendance</p>
-              <div className="flex items-center gap-8">
-                <div>
-                  <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock In</span>
-                  <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_in_time ?? null)}</p>
-                </div>
-                {todayClock?.clock_in_time && todayClock.clock_in_time > '10:15' && (
+              {todayClock?.clock_in_time ? (
+                <div className="flex items-center gap-8">
                   <div>
-                    <span className="text-[9px] text-amber-600 uppercase tracking-wider">Late</span>
-                    <p className="text-sm font-light text-amber-600 mt-0.5">
-                      +{minutesDiff('10:00', todayClock.clock_in_time)}m
-                    </p>
+                    <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock In</span>
+                    <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock.clock_in_time)}</p>
                   </div>
-                )}
-              </div>
+                  {todayClock.clock_in_time > '10:15' && (
+                    <div>
+                      <span className="text-[9px] text-amber-600 uppercase tracking-wider">Late</span>
+                      <p className="text-sm font-light text-amber-600 mt-0.5">
+                        +{minutesDiff('10:00', todayClock.clock_in_time)}m
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm font-light text-[#bbb] mt-0.5">Not clocked in yet</p>
+              )}
               {clockError && <p className="text-xs text-red-400 mt-2">{clockError}</p>}
             </div>
-            <button
-              onClick={() => clockIn(userId, isAdmin)}
-              disabled={clockAction || !!todayClock?.clock_in_time}
-              className="px-6 py-2.5 border border-emerald-600 text-xs tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30"
-            >
-              {clockAction ? '…' : 'Clock In'}
-            </button>
+            {todayClock?.clock_in_time ? (
+              <button
+                onClick={() => deleteClockIn(userId, isAdmin)}
+                disabled={clockAction}
+                className="px-6 py-2.5 border border-red-400 text-xs tracking-[0.2em] uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-30"
+              >
+                {clockAction ? '…' : 'Delete'}
+              </button>
+            ) : (
+              <button
+                onClick={() => clockIn(userId, isAdmin)}
+                disabled={clockAction}
+                className="px-6 py-2.5 border border-emerald-600 text-xs tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30"
+              >
+                {clockAction ? '…' : 'Clock In'}
+              </button>
+            )}
           </div>
 
           {/* Admin: today's team clock log */}
