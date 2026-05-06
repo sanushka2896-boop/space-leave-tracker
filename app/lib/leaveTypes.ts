@@ -7,12 +7,12 @@ export type LeaveTypeDef = {
   sort_order: number
 }
 
-/** WFH allocation in days from a role string. Juniors = 0 (ineligible). */
+/** WFH allocation in days from a role string. Juniors = 0, Mid = 12, all others = 20. */
 export function getWfhAllocation(role: string | null | undefined): number {
   if (!role) return 0
   const r = role.toLowerCase()
   if (r.includes('junior')) return 0
-  if (r.endsWith(' mid') || r.includes(' mid ')) return 12
+  if (r.includes(' mid') || r === 'mid') return 12
   return 20
 }
 

@@ -51,8 +51,9 @@ const MONTHS = ['January','February','March','April','May','June','July','August
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 
 const TYPE_LABELS: Record<string, string> = {
+  casual: 'Casual',
   sick: 'Sick',
-  earned: 'Earned',
+  earned: 'Casual',
   wfh: 'WFH',
 }
 

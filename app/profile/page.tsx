@@ -308,7 +308,7 @@ export default function ProfilePage() {
                             <select value={editState.type} onChange={e => setEditState({ ...editState, type: e.target.value })}
                               className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
                               <option value="sick">Sick Leave</option>
-                              <option value="earned">Earned Leave</option>
+                              <option value="casual">Casual Leave</option>
                               <option value="wfh">WFH</option>
                             </select>
                           </div>

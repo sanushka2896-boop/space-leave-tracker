@@ -4,6 +4,7 @@ import { supabase, supabaseAdmin } from '../lib/supabase'
 import { useRouter } from 'next/navigation'
 import Nav from '../components/Nav'
 import type { LeaveTypeDef } from '../lib/leaveTypes'
+import { getWfhAllocation } from '../lib/leaveTypes'
 
 type Leave = {
   id: string
@@ -203,6 +204,24 @@ export default function AdminPage() {
       }
     }
     return balMap
+  }
+
+  function autoAssignByDesignation() {
+    if (!qUserId) return
+    const member = team.find(m => m.id === qUserId)
+    const role = member?.role ?? null
+    const wfh = getWfhAllocation(role)
+    setQBalancesEdit(prev => {
+      const updated = { ...prev }
+      if ('casual' in updated) updated['casual'] = { allocated: '20', balance: '20' }
+      if ('sick' in updated) updated['sick'] = { allocated: '7', balance: '7' }
+      if ('wfh' in updated) {
+        updated['wfh'] = { allocated: String(wfh), balance: String(wfh) }
+      } else if (wfh > 0) {
+        updated['wfh'] = { allocated: String(wfh), balance: String(wfh) }
+      }
+      return updated
+    })
   }
 
   async function handleLeaveAction(id: string, action: 'approve' | 'reject', rejectionReason?: string) {
@@ -739,8 +758,14 @@ export default function AdminPage() {
                 className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
               >
                 <option value="">Select employee</option>
-                {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
+                {team.map(m => <option key={m.id} value={m.id}>{m.name || m.email} {m.role ? `— ${m.role}` : ''}</option>)}
               </select>
+              {qUserId && team.find(m => m.id === qUserId)?.role && (
+                <p className="text-[10px] text-[#aaa] mt-1 tracking-wider">
+                  Role: {team.find(m => m.id === qUserId)?.role}
+                  {' · WFH eligible: '}{getWfhAllocation(team.find(m => m.id === qUserId)?.role)} days
+                </p>
+              )}
             </div>
 
             {qUserId && leaveTypes.filter(lt => lt.is_active).length > 0 && (
@@ -790,13 +815,23 @@ export default function AdminPage() {
 
             {qError && <p className="text-xs text-red-400">{qError}</p>}
             {qSuccess && <p className="text-xs text-emerald-600">{qSuccess}</p>}
-            <button
-              onClick={saveAllQuota}
-              disabled={qSaving || !qUserId}
-              className="w-full py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
-            >
-              {qSaving ? 'Saving…' : 'Save Quotas'}
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={autoAssignByDesignation}
+                disabled={!qUserId}
+                className="flex-1 py-2 border border-[#888] text-xs tracking-[0.25em] uppercase text-[#888] hover:border-[#1a1a1a] hover:text-[#1a1a1a] transition-all cursor-pointer disabled:opacity-40"
+              >
+                Auto-assign by Designation
+              </button>
+              <button
+                onClick={saveAllQuota}
+                disabled={qSaving || !qUserId}
+                className="flex-1 py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
+              >
+                {qSaving ? 'Saving…' : 'Save Quotas'}
+              </button>
+            </div>
+            <p className="text-[10px] text-[#bbb] tracking-wider">Auto-assign sets Casual Leave (20d), Sick Leave (7d), and WFH by designation. Maternity, Miscarriage, and Sabbatical must be assigned manually.</p>
           </div>
         </section>
 

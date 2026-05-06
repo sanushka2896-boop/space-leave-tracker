@@ -38,17 +38,13 @@ export async function GET(req: NextRequest) {
 
   // Fetch leave balances for all users
   const userIds = (allUsers ?? []).map((u: any) => u.id)
-  const { data: balances } = userIds.length > 0
-    ? await supabase.from('leave_balance').select('*').in('user_id', userIds)
+  const { data: balanceRows } = userIds.length > 0
+    ? await supabase.from('leave_balances').select('user_id, leave_type, allocated, balance').in('user_id', userIds)
     : { data: [] }
 
   const team = (allUsers ?? []).map((u: any) => ({
     ...u,
-    balance: (balances ?? []).find((b: any) => b.user_id === u.id) ?? {
-      sick_leaves: 12,
-      earned_leaves: 15,
-      wfh_days: 24,
-    },
+    balances: (balanceRows ?? []).filter((b: any) => b.user_id === u.id),
   }))
 
   return Response.json({ pendingLeaves, team, holidays: holidays ?? [], reviews })
