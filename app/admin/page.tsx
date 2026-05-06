@@ -97,6 +97,7 @@ export default function AdminPage() {
   const [qUserId, setQUserId] = useState('')
   const [qBalancesEdit, setQBalancesEdit] = useState<Record<string, { allocated: string; balance: string }>>({})
   const [qSaving, setQSaving] = useState(false)
+  const [qSeedingAll, setQSeedingAll] = useState(false)
   const [qError, setQError] = useState('')
   const [qSuccess, setQSuccess] = useState('')
 
@@ -206,22 +207,41 @@ export default function AdminPage() {
     return balMap
   }
 
-  function autoAssignByDesignation() {
+  async function autoAssignByDesignation() {
     if (!qUserId) return
     const member = team.find(m => m.id === qUserId)
     const role = member?.role ?? null
     const wfh = getWfhAllocation(role)
-    setQBalancesEdit(prev => {
-      const updated = { ...prev }
-      if ('casual' in updated) updated['casual'] = { allocated: '20', balance: '20' }
-      if ('sick' in updated) updated['sick'] = { allocated: '7', balance: '7' }
-      if ('wfh' in updated) {
-        updated['wfh'] = { allocated: String(wfh), balance: String(wfh) }
-      } else if (wfh > 0) {
-        updated['wfh'] = { allocated: String(wfh), balance: String(wfh) }
-      }
-      return updated
-    })
+    const casualDays = leaveTypes.find(lt => lt.key === 'casual')?.default_days ?? 20
+    const sickDays = leaveTypes.find(lt => lt.key === 'sick')?.default_days ?? 7
+
+    const updated = { ...qBalancesEdit }
+    if ('casual' in updated) updated['casual'] = { allocated: String(casualDays), balance: String(casualDays) }
+    if ('sick' in updated) updated['sick'] = { allocated: String(sickDays), balance: String(sickDays) }
+    if (wfh > 0) {
+      updated['wfh'] = { allocated: String(wfh), balance: String(wfh) }
+    } else if ('wfh' in updated) {
+      updated['wfh'] = { allocated: '0', balance: '0' }
+    }
+    setQBalancesEdit(updated)
+
+    setQSaving(true)
+    setQError('')
+    setQSuccess('')
+    const year = new Date().getFullYear()
+    const rows = Object.entries(updated).map(([lt, vals]) => ({
+      user_id: qUserId,
+      leave_type: lt,
+      allocated: parseFloat(vals.allocated) || 0,
+      balance: parseFloat(vals.balance) || 0,
+      year,
+    }))
+    await supabaseAdmin.from('leave_balances').delete().eq('user_id', qUserId)
+    const { error } = await supabaseAdmin.from('leave_balances').insert(rows)
+    if (error) { setQError(error.message); setQSaving(false); return }
+    setQSuccess('Auto-assigned and saved.')
+    await loadData()
+    setQSaving(false)
   }
 
   async function handleLeaveAction(id: string, action: 'approve' | 'reject', rejectionReason?: string) {
@@ -242,14 +262,18 @@ export default function AdminPage() {
     }
 
     if (action === 'approve') {
-      const { data: bal } = await supabaseAdmin
+      const { data: balRows } = await supabaseAdmin
         .from('leave_balances').select('balance, allocated')
-        .eq('user_id', leave.user_id).eq('leave_type', leave.type).maybeSingle()
-      await supabaseAdmin.from('leave_balances').upsert({
+        .eq('user_id', leave.user_id).eq('leave_type', leave.type)
+      const bal = (balRows ?? [])[0] ?? null
+      await supabaseAdmin.from('leave_balances').delete()
+        .eq('user_id', leave.user_id).eq('leave_type', leave.type)
+      await supabaseAdmin.from('leave_balances').insert({
         user_id: leave.user_id,
         leave_type: leave.type,
         allocated: bal?.allocated ?? 0,
         balance: (bal?.balance ?? 0) - leave.value,
+        year: new Date().getFullYear(),
       })
     }
 
@@ -321,14 +345,18 @@ export default function AdminPage() {
     })
     if (insertErr) { setAError(insertErr.message); setASaving(false); return }
 
-    const { data: bal } = await supabaseAdmin
+    const { data: balRows } = await supabaseAdmin
       .from('leave_balances').select('balance, allocated')
-      .eq('user_id', aForm.user_id).eq('leave_type', aForm.type).maybeSingle()
-    await supabaseAdmin.from('leave_balances').upsert({
+      .eq('user_id', aForm.user_id).eq('leave_type', aForm.type)
+    const bal = (balRows ?? [])[0] ?? null
+    await supabaseAdmin.from('leave_balances').delete()
+      .eq('user_id', aForm.user_id).eq('leave_type', aForm.type)
+    await supabaseAdmin.from('leave_balances').insert({
       user_id: aForm.user_id,
       leave_type: aForm.type,
       allocated: bal?.allocated ?? 0,
       balance: (bal?.balance ?? 0) - value,
+      year: new Date().getFullYear(),
     })
 
     setAForm({ user_id: '', type: 'casual', date_from: '', date_to: '', value: '1' })
@@ -341,17 +369,47 @@ export default function AdminPage() {
     setQError('')
     setQSuccess('')
     setQSaving(true)
+    const year = new Date().getFullYear()
     const rows = Object.entries(qBalancesEdit).map(([lt, vals]) => ({
       user_id: qUserId,
       leave_type: lt,
       allocated: parseFloat(vals.allocated) || 0,
       balance: parseFloat(vals.balance) || 0,
+      year,
     }))
-    const { error } = await supabaseAdmin.from('leave_balances').upsert(rows)
+    await supabaseAdmin.from('leave_balances').delete().eq('user_id', qUserId)
+    const { error } = await supabaseAdmin.from('leave_balances').insert(rows)
     if (error) { setQError(error.message); setQSaving(false); return }
     setQSuccess('Quotas updated.')
     await loadData()
     setQSaving(false)
+  }
+
+  async function seedAllEmployees() {
+    setQSeedingAll(true)
+    setQError('')
+    setQSuccess('')
+    const year = new Date().getFullYear()
+    const casualDays = leaveTypes.find(lt => lt.key === 'casual')?.default_days ?? 20
+    const sickDays = leaveTypes.find(lt => lt.key === 'sick')?.default_days ?? 7
+
+    for (const member of team) {
+      const wfh = getWfhAllocation(member.role)
+      await supabaseAdmin.from('leave_balances').delete()
+        .eq('user_id', member.id).in('leave_type', ['casual', 'sick', 'wfh'])
+      const rows: { user_id: string; leave_type: string; allocated: number; balance: number; year: number }[] = [
+        { user_id: member.id, leave_type: 'casual', allocated: casualDays, balance: casualDays, year },
+        { user_id: member.id, leave_type: 'sick', allocated: sickDays, balance: sickDays, year },
+      ]
+      if (wfh > 0) {
+        rows.push({ user_id: member.id, leave_type: 'wfh', allocated: wfh, balance: wfh, year })
+      }
+      await supabaseAdmin.from('leave_balances').insert(rows)
+    }
+
+    setQSuccess(`Seeded ${team.length} employees with casual, sick, and WFH quotas.`)
+    await loadData()
+    setQSeedingAll(false)
   }
 
   async function addWorkingSaturday() {
@@ -818,10 +876,10 @@ export default function AdminPage() {
             <div className="flex gap-3">
               <button
                 onClick={autoAssignByDesignation}
-                disabled={!qUserId}
+                disabled={qSaving || !qUserId}
                 className="flex-1 py-2 border border-[#888] text-xs tracking-[0.25em] uppercase text-[#888] hover:border-[#1a1a1a] hover:text-[#1a1a1a] transition-all cursor-pointer disabled:opacity-40"
               >
-                Auto-assign by Designation
+                {qSaving ? 'Saving…' : 'Auto-assign by Designation'}
               </button>
               <button
                 onClick={saveAllQuota}
@@ -831,7 +889,14 @@ export default function AdminPage() {
                 {qSaving ? 'Saving…' : 'Save Quotas'}
               </button>
             </div>
-            <p className="text-[10px] text-[#bbb] tracking-wider">Auto-assign sets Casual Leave (20d), Sick Leave (7d), and WFH by designation. Maternity, Miscarriage, and Sabbatical must be assigned manually.</p>
+            <button
+              onClick={seedAllEmployees}
+              disabled={qSeedingAll || team.length === 0}
+              className="w-full py-2 border border-emerald-600 text-xs tracking-[0.25em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-40"
+            >
+              {qSeedingAll ? 'Seeding…' : `Seed All Employees (${team.length})`}
+            </button>
+            <p className="text-[10px] text-[#bbb] tracking-wider">Auto-assign populates and saves Casual/Sick/WFH for one employee. Seed All does casual, sick, and WFH for every employee at once — use once during setup. Maternity, Miscarriage, and Sabbatical must be assigned manually.</p>
           </div>
         </section>
 
