@@ -97,11 +97,15 @@ export default function AttendancePage() {
 
   async function loadClockLogs(uid: string, adminFlag: boolean) {
     const today = getISTDate()
-    const selectStr = adminFlag ? '*, users(name)' : '*'
-    let q = supabaseAdmin.from('clock_logs').select(selectStr).lt('date', today).order('date', { ascending: false })
-    if (!adminFlag) q = (q as any).eq('user_id', uid)
-    const { data } = await q
-    setClockLogs(data ?? [])
+    if (adminFlag) {
+      const { data } = await supabaseAdmin.from('clock_logs')
+        .select('*, users(name)').lt('date', today).order('date', { ascending: false })
+      setClockLogs((data ?? []) as ClockLogEntry[])
+    } else {
+      const { data } = await supabaseAdmin.from('clock_logs')
+        .select('*').eq('user_id', uid).lt('date', today).order('date', { ascending: false })
+      setClockLogs((data ?? []) as ClockLogEntry[])
+    }
   }
 
   async function loadLate() {
@@ -114,14 +118,23 @@ export default function AttendancePage() {
   }
 
   async function loadOvertime(uid: string, adminFlag: boolean) {
-    const selectStr = adminFlag ? '*, users(name)' : '*'
-    let q = supabaseAdmin.from('overtime_entries').select(selectStr).order('date', { ascending: false })
-    if (!adminFlag) q = (q as any).eq('user_id', uid)
-    const { data } = await q
-    setOvertimeEntries(data ?? [])
-    const map: Record<string, string> = {}
-    for (const e of (data ?? [])) map[e.id] = e.compensated_by ?? ''
-    setOtNotesEdit(map)
+    if (adminFlag) {
+      const { data } = await supabaseAdmin.from('overtime_entries')
+        .select('*, users(name)').order('date', { ascending: false })
+      const entries = (data ?? []) as OvertimeEntry[]
+      setOvertimeEntries(entries)
+      const map: Record<string, string> = {}
+      for (const e of entries) map[e.id] = e.compensated_by ?? ''
+      setOtNotesEdit(map)
+    } else {
+      const { data } = await supabaseAdmin.from('overtime_entries')
+        .select('*').eq('user_id', uid).order('date', { ascending: false })
+      const entries = (data ?? []) as OvertimeEntry[]
+      setOvertimeEntries(entries)
+      const map: Record<string, string> = {}
+      for (const e of entries) map[e.id] = e.compensated_by ?? ''
+      setOtNotesEdit(map)
+    }
   }
 
   useEffect(() => {
