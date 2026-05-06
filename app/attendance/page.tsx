@@ -4,16 +4,12 @@ import { supabase, supabaseAdmin } from '../lib/supabase'
 import { useRouter } from 'next/navigation'
 import Nav from '../components/Nav'
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
 type LateArrival = {
   id: string
   user_id: string
   date: string
   arrival_time: string | null
-  departure_time: string | null
   minutes_late: number | null
-  minutes_missed: number | null
   reason: string | null
   pto_deduction_status: string
   approved: boolean
@@ -36,12 +32,9 @@ type OvertimeEntry = {
   approved_by: string | null
   rejection_reason: string | null
   created_at: string
-  users?: { name: string; email: string } | null
 }
 
 type TeamMember = { id: string; name: string; email: string }
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
 
 const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const DAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -58,7 +51,6 @@ function fmtTime(t: string | null) {
 function dayAbbr(d: string) { return d ? DAY_ABBR[new Date(d + 'T00:00:00').getDay()] : '' }
 function dayFull(d: string) { return d ? DAY_FULL[new Date(d + 'T00:00:00').getDay()] : '' }
 
-/** Overtime = minutes logged past 6:00 PM */
 function calcOvertimeMins(logout: string): number {
   const [h, m] = logout.split(':').map(Number)
   return Math.max(0, h * 60 + m - 18 * 60)
@@ -72,15 +64,12 @@ function minsToLabel(mins: number | null): string {
   return `${h} hr ${m} min${m !== 1 ? 's' : ''}`
 }
 
-// Minutes from 10:00 AM
 function minsLateFrom10(t: string): number {
   const [h, m] = t.split(':').map(Number)
   return Math.max(0, h * 60 + m - 10 * 60)
 }
 
-// PTO badge config
 const PTO_OPTIONS = ['Pending', 'Made Up Time', 'PTO Deducted'] as const
-type PTOStatus = typeof PTO_OPTIONS[number]
 
 function ptoBadgeCls(v: string) {
   if (v === 'Pending') return 'text-red-600 bg-red-50 border-red-200'
@@ -88,8 +77,6 @@ function ptoBadgeCls(v: string) {
   if (v === 'PTO Deducted') return 'text-amber-600 bg-amber-50 border-amber-200'
   return 'text-[#888] bg-[#f5f5f5] border-[#ddd]'
 }
-
-// ── Component ──────────────────────────────────────────────────────────────────
 
 export default function AttendancePage() {
   const [tab, setTab] = useState<'late' | 'overtime'>('late')
@@ -99,15 +86,11 @@ export default function AttendancePage() {
   const [team, setTeam] = useState<TeamMember[]>([])
   const [loading, setLoading] = useState(true)
 
-  // ── Late Arrivals state ──
   const [lateArrivals, setLateArrivals] = useState<LateArrival[]>([])
-  const [addLate, setAddLate] = useState({
-    user_id: '', date: '', arrival_time: '', departure_time: '', minutes_missed: '', reason: ''
-  })
+  const [addLate, setAddLate] = useState({ user_id: '', date: '', arrival_time: '', reason: '' })
   const [addLateSaving, setAddLateSaving] = useState(false)
   const [addLateErr, setAddLateErr] = useState('')
 
-  // ── Overtime state ──
   const [overtimeEntries, setOvertimeEntries] = useState<OvertimeEntry[]>([])
   const [otForm, setOtForm] = useState({
     date: '', login_time: '', logout_time: '',
@@ -118,8 +101,6 @@ export default function AttendancePage() {
 
   const router = useRouter()
 
-  // ── Data loading ──────────────────────────────────────────────────────────────
-
   async function loadLate() {
     const { data, error } = await supabaseAdmin
       .from('late_arrivals')
@@ -129,12 +110,12 @@ export default function AttendancePage() {
     setLateArrivals(data ?? [])
   }
 
-  async function loadOvertime(uid: string, adminFlag: boolean) {
-    const q = supabaseAdmin
+  async function loadOvertime(uid: string) {
+    const { data, error } = await supabaseAdmin
       .from('overtime_entries')
-      .select('*, users(name, email)')
+      .select('*')
+      .eq('user_id', uid)
       .order('date', { ascending: false })
-    const { data, error } = adminFlag ? await q : await q.eq('user_id', uid)
     if (error) console.error('[Attendance] loadOvertime error:', error)
     setOvertimeEntries(data ?? [])
   }
@@ -153,12 +134,10 @@ export default function AttendancePage() {
         const { data: usersData } = await supabaseAdmin.from('users').select('id, name, email').order('name')
         setTeam(usersData ?? [])
       }
-      await Promise.all([loadLate(), loadOvertime(dbUser.id, adminFlag)])
+      await Promise.all([loadLate(), loadOvertime(dbUser.id)])
       setLoading(false)
     })
   }, [])
-
-  // ── Late Arrival actions ───────────────────────────────────────────────────────
 
   async function addLateRow() {
     if (!addLate.user_id || !addLate.date || !addLate.arrival_time) {
@@ -173,9 +152,7 @@ export default function AttendancePage() {
         user_id: addLate.user_id,
         date: addLate.date,
         arrival_time: addLate.arrival_time,
-        departure_time: addLate.departure_time || null,
         minutes_late: minLate,
-        minutes_missed: addLate.minutes_missed ? parseInt(addLate.minutes_missed) : null,
         reason: addLate.reason || null,
         pto_deduction_status: 'Pending',
         approved: false,
@@ -183,7 +160,7 @@ export default function AttendancePage() {
       { onConflict: 'user_id,date' }
     )
     if (error) { setAddLateErr(error.message); setAddLateSaving(false); return }
-    setAddLate({ user_id: '', date: '', arrival_time: '', departure_time: '', minutes_missed: '', reason: '' })
+    setAddLate({ user_id: '', date: '', arrival_time: '', reason: '' })
     await loadLate()
     setAddLateSaving(false)
   }
@@ -201,13 +178,6 @@ export default function AttendancePage() {
     }).eq('id', row.id)
     await loadLate()
   }
-
-  async function saveLateInline(id: string, patch: Record<string, unknown>) {
-    await supabaseAdmin.from('late_arrivals').update(patch).eq('id', id)
-    await loadLate()
-  }
-
-  // ── Overtime actions ───────────────────────────────────────────────────────────
 
   async function submitOvertime() {
     if (!otForm.date || !otForm.login_time || !otForm.logout_time) {
@@ -231,18 +201,8 @@ export default function AttendancePage() {
     })
     if (error) { setOtErr(error.message); setOtSaving(false); return }
     setOtForm({ date: '', login_time: '', logout_time: '', extra_hours_start: '', extra_hours_end: '', reason: '', compensated_by: '' })
-    await loadOvertime(userId, isAdmin)
+    await loadOvertime(userId)
     setOtSaving(false)
-  }
-
-  async function toggleOTApproved(entry: OvertimeEntry) {
-    const newVal = !entry.approved
-    await supabaseAdmin.from('overtime_entries').update({
-      approved: newVal,
-      approved_by: newVal ? adminName : null,
-      rejection_reason: null,
-    }).eq('id', entry.id)
-    await loadOvertime(userId, isAdmin)
   }
 
   function groupByMonth(entries: OvertimeEntry[]) {
@@ -285,10 +245,9 @@ export default function AttendancePage() {
           ))}
         </div>
 
-        {/* ══════════════════════ LATE ARRIVALS ══════════════════════ */}
+        {/* ══ LATE ARRIVALS ══ */}
         {tab === 'late' && (
           <>
-            {/* Admin: add row form */}
             {isAdmin && (
               <div className="border border-[#ddd] bg-white p-6 mb-6">
                 <p className="text-xs tracking-[0.2em] uppercase text-[#888] mb-4">Add Late Arrival</p>
@@ -321,18 +280,6 @@ export default function AttendancePage() {
                       onChange={e => setAddLate({ ...addLate, arrival_time: e.target.value })}
                       className="border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
                   </div>
-                  <div>
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Departure Time</label>
-                    <input type="time" value={addLate.departure_time}
-                      onChange={e => setAddLate({ ...addLate, departure_time: e.target.value })}
-                      className="border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
-                  <div className="w-24">
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Mins Missed</label>
-                    <input type="number" min="0" value={addLate.minutes_missed}
-                      onChange={e => setAddLate({ ...addLate, minutes_missed: e.target.value })}
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
                   <div className="min-w-[120px] flex-1">
                     <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Reason</label>
                     <input type="text" value={addLate.reason}
@@ -360,9 +307,7 @@ export default function AttendancePage() {
                       <Th label="Day" />
                       <Th label="Name" />
                       <Th label="Arrival Time" />
-                      <Th label="Departure Time" />
-                      <Th label="Mins Late" />
-                      <Th label="Mins Missed (Early Departure)" />
+                      <Th label="Minutes Late" />
                       <Th label="Reason" />
                       <Th label="PTO Deduction Status" />
                       <Th label="Approved" />
@@ -380,52 +325,8 @@ export default function AttendancePage() {
                         <td className="px-4 py-3 text-xs text-amber-600 font-medium whitespace-nowrap">
                           {fmtTime(row.arrival_time)}
                         </td>
-
-                        {/* Departure time — admin can edit inline */}
-                        <td className="px-4 py-3 text-xs text-[#888]">
-                          {isAdmin ? (
-                            <input type="time"
-                              defaultValue={(row.departure_time ?? '').slice(0, 5)}
-                              onBlur={e => {
-                                const v = e.target.value
-                                if (v !== (row.departure_time ?? '').slice(0, 5))
-                                  saveLateInline(row.id, { departure_time: v })
-                              }}
-                              className="border border-[#ddd] bg-white px-2 py-1 text-xs focus:outline-none w-28" />
-                          ) : fmtTime(row.departure_time)}
-                        </td>
-
                         <td className="px-4 py-3 text-xs text-[#888]">{row.minutes_late ?? '—'}</td>
-
-                        {/* Mins missed — admin edits inline */}
-                        <td className="px-4 py-3 text-xs text-[#888]">
-                          {isAdmin ? (
-                            <input type="number" min="0"
-                              defaultValue={row.minutes_missed ?? ''}
-                              onBlur={e => {
-                                const v = parseInt(e.target.value)
-                                if (!isNaN(v) && v !== row.minutes_missed)
-                                  saveLateInline(row.id, { minutes_missed: v })
-                              }}
-                              className="border border-[#ddd] bg-white px-2 py-1 text-xs focus:outline-none w-20" />
-                          ) : (row.minutes_missed ?? '—')}
-                        </td>
-
-                        {/* Reason — admin edits inline */}
-                        <td className="px-4 py-3 text-xs text-[#888]">
-                          {isAdmin ? (
-                            <input type="text"
-                              defaultValue={row.reason ?? ''}
-                              onBlur={e => {
-                                const v = e.target.value
-                                if (v !== (row.reason ?? ''))
-                                  saveLateInline(row.id, { reason: v || null })
-                              }}
-                              className="border border-[#ddd] bg-white px-2 py-1 text-xs focus:outline-none w-32" />
-                          ) : (row.reason || '—')}
-                        </td>
-
-                        {/* PTO Status — admin dropdown, employee read-only badge */}
+                        <td className="px-4 py-3 text-xs text-[#888]">{row.reason || '—'}</td>
                         <td className="px-4 py-3">
                           {isAdmin ? (
                             <select
@@ -440,8 +341,6 @@ export default function AttendancePage() {
                             </span>
                           )}
                         </td>
-
-                        {/* Approved — admin checkbox, employee read-only tick */}
                         <td className="px-4 py-3">
                           {isAdmin ? (
                             <input type="checkbox" checked={!!row.approved}
@@ -453,7 +352,6 @@ export default function AttendancePage() {
                             </div>
                           )}
                         </td>
-
                         <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{row.approved_by || '—'}</td>
                       </tr>
                     ))}
@@ -464,103 +362,101 @@ export default function AttendancePage() {
           </>
         )}
 
-        {/* ══════════════════════ OVERTIME ══════════════════════ */}
+        {/* ══ OVERTIME ══ */}
         {tab === 'overtime' && (
           <>
-            {/* Employee submit form (not shown to admin) */}
-            {!isAdmin && (
-              <div className="border border-[#ddd] bg-white p-6 mb-8">
-                <p className="text-xs tracking-[0.2em] uppercase text-[#888] mb-5">Log Overtime</p>
+            {/* Submit form — all users */}
+            <div className="border border-[#ddd] bg-white p-6 mb-8">
+              <p className="text-xs tracking-[0.2em] uppercase text-[#888] mb-5">Log Overtime</p>
 
-                {/* Row 1: Date + Day */}
-                <div className="grid grid-cols-6 gap-4 mb-4">
-                  <div className="col-span-2">
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Date</label>
-                    <input type="date" value={otForm.date}
-                      onChange={e => setOtForm({ ...otForm, date: e.target.value })}
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Day</label>
-                    <div className="border border-[#eee] bg-[#f8f6f3] px-3 py-2 text-xs text-[#888] h-[33px]">
-                      {otForm.date ? dayFull(otForm.date) : '—'}
-                    </div>
+              {/* Row 1: Date + Day */}
+              <div className="grid grid-cols-6 gap-4 mb-4">
+                <div className="col-span-2">
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Date</label>
+                  <input type="date" value={otForm.date}
+                    onChange={e => setOtForm({ ...otForm, date: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                </div>
+                <div>
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Day</label>
+                  <div className="border border-[#eee] bg-[#f8f6f3] px-3 py-2 text-xs text-[#888] h-[33px]">
+                    {otForm.date ? dayFull(otForm.date) : '—'}
                   </div>
                 </div>
-
-                {/* Row 2: Login / Logout / OT auto-calc */}
-                <div className="grid grid-cols-6 gap-4 mb-4">
-                  <div className="col-span-2">
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Logging-in Time</label>
-                    <input type="time" value={otForm.login_time}
-                      onChange={e => setOtForm({ ...otForm, login_time: e.target.value })}
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Logging-out Time</label>
-                    <input type="time" value={otForm.logout_time}
-                      onChange={e => setOtForm({ ...otForm, logout_time: e.target.value })}
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Overtime Time (auto)</label>
-                    <div className="border border-[#eee] bg-[#f8f6f3] px-3 py-2 text-xs text-[#1a1a1a] font-medium h-[33px]">
-                      {previewOT !== null && previewOT > 0 ? minsToLabel(previewOT) : '—'}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Row 3: Extra hours range */}
-                <div className="grid grid-cols-6 gap-4 mb-4">
-                  <div className="col-span-2">
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Extra Hours — Start</label>
-                    <input type="time" value={otForm.extra_hours_start}
-                      onChange={e => setOtForm({ ...otForm, extra_hours_start: e.target.value })}
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Extra Hours — End</label>
-                    <input type="time" value={otForm.extra_hours_end}
-                      onChange={e => setOtForm({ ...otForm, extra_hours_end: e.target.value })}
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
-                  {otForm.extra_hours_start && otForm.extra_hours_end && (
-                    <div className="col-span-2 flex items-end pb-2">
-                      <span className="text-[10px] text-[#888]">
-                        {fmtTime(otForm.extra_hours_start)} – {fmtTime(otForm.extra_hours_end)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Row 4: Reason + Compensation */}
-                <div className="grid grid-cols-2 gap-4 mb-5">
-                  <div>
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Reason for Extra Hours Logged In</label>
-                    <input type="text" value={otForm.reason}
-                      onChange={e => setOtForm({ ...otForm, reason: e.target.value })}
-                      placeholder="Why overtime?"
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Compensated by Equal Time-Off Next Day</label>
-                    <input type="text" value={otForm.compensated_by}
-                      onChange={e => setOtForm({ ...otForm, compensated_by: e.target.value })}
-                      placeholder="e.g. Early leave on 7 May"
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
-                  </div>
-                </div>
-
-                {otErr && <p className="text-xs text-red-400 mb-3">{otErr}</p>}
-                <button onClick={submitOvertime}
-                  disabled={otSaving || !otForm.date || !otForm.login_time || !otForm.logout_time}
-                  className="px-8 py-2 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">
-                  {otSaving ? 'Submitting…' : 'Submit Overtime'}
-                </button>
               </div>
-            )}
 
-            {/* Overtime table — grouped by month for all views */}
+              {/* Row 2: Login / Logout / OT auto */}
+              <div className="grid grid-cols-6 gap-4 mb-4">
+                <div className="col-span-2">
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Logging-in Time</label>
+                  <input type="time" value={otForm.login_time}
+                    onChange={e => setOtForm({ ...otForm, login_time: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Logging-out Time</label>
+                  <input type="time" value={otForm.logout_time}
+                    onChange={e => setOtForm({ ...otForm, logout_time: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Overtime Time (auto)</label>
+                  <div className="border border-[#eee] bg-[#f8f6f3] px-3 py-2 text-xs text-[#1a1a1a] font-medium h-[33px]">
+                    {previewOT !== null && previewOT > 0 ? minsToLabel(previewOT) : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 3: Extra hours range */}
+              <div className="grid grid-cols-6 gap-4 mb-4">
+                <div className="col-span-2">
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Extra Hours — Start</label>
+                  <input type="time" value={otForm.extra_hours_start}
+                    onChange={e => setOtForm({ ...otForm, extra_hours_start: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Extra Hours — End</label>
+                  <input type="time" value={otForm.extra_hours_end}
+                    onChange={e => setOtForm({ ...otForm, extra_hours_end: e.target.value })}
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                </div>
+                {otForm.extra_hours_start && otForm.extra_hours_end && (
+                  <div className="col-span-2 flex items-end pb-2">
+                    <span className="text-[10px] text-[#888]">
+                      {fmtTime(otForm.extra_hours_start)} – {fmtTime(otForm.extra_hours_end)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Row 4: Reason + Compensation */}
+              <div className="grid grid-cols-2 gap-4 mb-5">
+                <div>
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Reason for Extra Hours</label>
+                  <input type="text" value={otForm.reason}
+                    onChange={e => setOtForm({ ...otForm, reason: e.target.value })}
+                    placeholder="Why overtime?"
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                </div>
+                <div>
+                  <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Compensated by Equal Time-Off Next Day</label>
+                  <input type="text" value={otForm.compensated_by}
+                    onChange={e => setOtForm({ ...otForm, compensated_by: e.target.value })}
+                    placeholder="e.g. Early leave on 7 May"
+                    className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs focus:outline-none" />
+                </div>
+              </div>
+
+              {otErr && <p className="text-xs text-red-400 mb-3">{otErr}</p>}
+              <button onClick={submitOvertime}
+                disabled={otSaving || !otForm.date || !otForm.login_time || !otForm.logout_time}
+                className="px-8 py-2 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                {otSaving ? 'Submitting…' : 'Submit Overtime'}
+              </button>
+            </div>
+
+            {/* Overtime table — user's own rows, grouped by month */}
             {overtimeEntries.length === 0 ? (
               <p className="text-sm text-[#bbb] tracking-wider">No overtime entries yet.</p>
             ) : (
@@ -569,7 +465,6 @@ export default function AttendancePage() {
                   .sort(([a], [b]) => b.localeCompare(a))
                   .map(([monthKey, entries]) => (
                     <div key={monthKey}>
-                      {/* Bold month header */}
                       <p className="text-xs font-bold tracking-[0.25em] uppercase text-[#1a1a1a] mb-3">
                         {new Date(monthKey + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'long' })}{' '}
                         &apos;{monthKey.slice(2, 4)}
@@ -581,11 +476,10 @@ export default function AttendancePage() {
                             <tr className="border-b border-[#eee]">
                               <Th label="Date" />
                               <Th label="Day" />
-                              <Th label="Name" />
                               <Th label="Logging-in Time" />
                               <Th label="Logging-out Time" />
                               <Th label="Overtime Time" />
-                              <Th label="Extra Hours (Start – End)" />
+                              <Th label="Extra Hours Logged-in" />
                               <Th label="Reason for Extra Hours" />
                               <Th label="Compensated by Time-Off" />
                               <Th label="Approved" />
@@ -597,9 +491,6 @@ export default function AttendancePage() {
                               <tr key={e.id} className={e.approved ? 'bg-emerald-50/40' : ''}>
                                 <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{fmtDate(e.date)}</td>
                                 <td className="px-4 py-3 text-xs text-[#888]">{dayAbbr(e.date)}</td>
-                                <td className="px-4 py-3 text-xs text-[#1a1a1a] font-medium">
-                                  {(e.users as any)?.name || '—'}
-                                </td>
                                 <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{fmtTime(e.login_time)}</td>
                                 <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{fmtTime(e.logout_time)}</td>
                                 <td className="px-4 py-3 text-xs text-[#1a1a1a] font-medium whitespace-nowrap">
@@ -612,15 +503,9 @@ export default function AttendancePage() {
                                 <td className="px-4 py-3 text-xs text-[#888] max-w-[140px]">{e.reason || '—'}</td>
                                 <td className="px-4 py-3 text-xs text-[#888] max-w-[140px]">{e.compensated_by || '—'}</td>
                                 <td className="px-4 py-3">
-                                  {isAdmin ? (
-                                    <input type="checkbox" checked={!!e.approved}
-                                      onChange={() => toggleOTApproved(e)}
-                                      className="w-4 h-4 accent-emerald-600 cursor-pointer" />
-                                  ) : (
-                                    <div className={`w-4 h-4 border flex items-center justify-center ${e.approved ? 'bg-emerald-500 border-emerald-500' : 'border-[#ddd]'}`}>
-                                      {e.approved && <span className="text-white text-[8px] leading-none">✓</span>}
-                                    </div>
-                                  )}
+                                  <div className={`w-4 h-4 border flex items-center justify-center ${e.approved ? 'bg-emerald-500 border-emerald-500' : 'border-[#ddd]'}`}>
+                                    {e.approved && <span className="text-white text-[8px] leading-none">✓</span>}
+                                  </div>
                                   {e.rejection_reason && (
                                     <p className="text-[9px] text-red-400 italic mt-1 max-w-[120px]">{e.rejection_reason}</p>
                                   )}

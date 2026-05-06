@@ -12,7 +12,7 @@ type Leave = {
 type EditState = { type: string; date_from: string; date_to: string; value: string; reason: string }
 type BalanceItem = { remaining: number; taken: number; scheduled: number }
 type TeamPerson = { name: string; type: string; date_from: string; date_to: string }
-type ClockLog = { id: string; user_id: string; date: string; clock_in: string | null; clock_out: string | null; users?: { name: string } | null }
+type ClockLog = { id: string; user_id: string; date: string; clock_in_time: string | null; users?: { name: string } | null }
 
 /** Returns current IST date (YYYY-MM-DD) and time (HH:MM) as plain text */
 function getISTNow(): { date: string; time: string } {
@@ -94,7 +94,7 @@ export default function Dashboard() {
     setTodayClock(myLogArr?.[0] ?? null)
     if (adminFlag) {
       const { data: allLogs } = await supabaseAdmin
-        .from('clock_logs').select('*, users(name)').eq('date', today).order('clock_in', { ascending: true })
+        .from('clock_logs').select('*, users(name)').eq('date', today).order('clock_in_time', { ascending: true })
       setAllClockLogs(allLogs ?? [])
     }
   }
@@ -105,7 +105,7 @@ export default function Dashboard() {
     const { date: today, time: t } = getISTNow()
     console.log('[Clock] clockIn IST — uid:', uid, 'date:', today, 'time:', t)
     const { data, error } = await supabaseAdmin.from('clock_logs')
-      .insert({ user_id: uid, date: today, clock_in: t })
+      .insert({ user_id: uid, date: today, clock_in_time: t })
       .select().limit(1)
     console.log('[Clock] clockIn result:', { data, error })
     if (error) {
@@ -121,27 +121,6 @@ export default function Dashboard() {
       )
       if (laErr) console.error('[Clock] late_arrivals upsert error:', laErr)
     }
-    await loadClockData(uid, adminFlag)
-    setClockAction(false)
-  }
-
-  async function clockOut(uid: string, adminFlag: boolean) {
-    setClockAction(true)
-    setClockError('')
-    const { date: today, time: t } = getISTNow()
-    console.log('[Clock] clockOut IST — uid:', uid, 'date:', today, 'time:', t)
-    const { error } = await supabaseAdmin.from('clock_logs')
-      .update({ clock_out: t }).eq('user_id', uid).eq('date', today)
-    console.log('[Clock] clockOut result:', { error })
-    if (error) {
-      setClockError(`Clock-out failed: ${error.message}`)
-      setClockAction(false)
-      return
-    }
-    const missed = t < '18:00' ? minutesDiff(t, '18:00') : 0
-    await supabaseAdmin.from('late_arrivals')
-      .update({ departure_time: t, minutes_missed: missed })
-      .eq('user_id', uid).eq('date', today)
     await loadClockData(uid, adminFlag)
     setClockAction(false)
   }
@@ -282,7 +261,7 @@ export default function Dashboard() {
           </button>
         </div>
 
-        {/* Clock In / Out */}
+        {/* Clock In */}
         <div className="mb-12">
           <div className="border border-[#ddd] bg-white px-8 py-5 flex items-center justify-between">
             <div>
@@ -290,39 +269,26 @@ export default function Dashboard() {
               <div className="flex items-center gap-8">
                 <div>
                   <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock In</span>
-                  <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_in ?? null)}</p>
+                  <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_in_time ?? null)}</p>
                 </div>
-                <div>
-                  <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock Out</span>
-                  <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock?.clock_out ?? null)}</p>
-                </div>
-                {todayClock?.clock_in && hhMM(todayClock.clock_in) > '10:15' && (
+                {todayClock?.clock_in_time && todayClock.clock_in_time > '10:15' && (
                   <div>
                     <span className="text-[9px] text-amber-600 uppercase tracking-wider">Late</span>
                     <p className="text-sm font-light text-amber-600 mt-0.5">
-                      +{minutesDiff('10:00', hhMM(todayClock.clock_in))}m
+                      +{minutesDiff('10:00', todayClock.clock_in_time)}m
                     </p>
                   </div>
                 )}
               </div>
               {clockError && <p className="text-xs text-red-400 mt-2">{clockError}</p>}
             </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => clockIn(userId, isAdmin)}
-                disabled={clockAction || !!todayClock?.clock_in}
-                className="px-6 py-2.5 border border-emerald-600 text-xs tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30"
-              >
-                {clockAction ? '…' : 'Clock In'}
-              </button>
-              <button
-                onClick={() => clockOut(userId, isAdmin)}
-                disabled={clockAction || !todayClock?.clock_in || !!todayClock?.clock_out}
-                className="px-6 py-2.5 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-30"
-              >
-                {clockAction ? '…' : 'Clock Out'}
-              </button>
-            </div>
+            <button
+              onClick={() => clockIn(userId, isAdmin)}
+              disabled={clockAction || !!todayClock?.clock_in_time}
+              className="px-6 py-2.5 border border-emerald-600 text-xs tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30"
+            >
+              {clockAction ? '…' : 'Clock In'}
+            </button>
           </div>
 
           {/* Admin: today's team clock log */}
@@ -331,24 +297,23 @@ export default function Dashboard() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-[#eee]">
-                    {['Employee', 'Clock In', 'Clock Out', 'Status'].map(h => (
+                    {['Employee', 'Clock In', 'Status'].map(h => (
                       <th key={h} className="px-6 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f5f5f5]">
                   {allClockLogs.map(log => {
-                    const late = log.clock_in && hhMM(log.clock_in) > '10:15'
+                    const late = log.clock_in_time && log.clock_in_time > '10:15'
                     return (
                       <tr key={log.id} className="hover:bg-[#fafafa]">
                         <td className="px-6 py-3 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>
-                        <td className={`px-6 py-3 text-xs ${late ? 'text-amber-600' : 'text-[#888]'}`}>{fmtTime(log.clock_in)}</td>
-                        <td className="px-6 py-3 text-xs text-[#888]">{fmtTime(log.clock_out)}</td>
+                        <td className={`px-6 py-3 text-xs ${late ? 'text-amber-600' : 'text-[#888]'}`}>{fmtTime(log.clock_in_time)}</td>
                         <td className="px-6 py-3">
-                          {!log.clock_in ? (
-                            <span className="text-[9px] uppercase tracking-wider text-[#ccc]">Absent</span>
+                          {!log.clock_in_time ? (
+                            <span className="text-[9px] uppercase tracking-wider text-[#ccc]">Not clocked in</span>
                           ) : late ? (
-                            <span className="text-[9px] uppercase tracking-wider text-amber-600">Late {minutesDiff('10:00', hhMM(log.clock_in!))}m</span>
+                            <span className="text-[9px] uppercase tracking-wider text-amber-600">Late {minutesDiff('10:00', log.clock_in_time!)}m</span>
                           ) : (
                             <span className="text-[9px] uppercase tracking-wider text-emerald-600">On time</span>
                           )}
