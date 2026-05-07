@@ -255,19 +255,35 @@ export default function AdminPage() {
     }
 
     if (action === 'approve') {
-      const { data: balRows } = await supabaseAdmin
-        .from('leave_balances').select('balance, allocated')
-        .eq('user_id', leave.user_id).eq('leave_type', leave.type)
-      const bal = (balRows ?? [])[0] ?? null
-      await supabaseAdmin.from('leave_balances').delete()
-        .eq('user_id', leave.user_id).eq('leave_type', leave.type)
-      await supabaseAdmin.from('leave_balances').insert({
-        user_id: leave.user_id,
-        leave_type: leave.type,
-        allocated: bal?.allocated ?? 0,
-        balance: (bal?.balance ?? 0) - leave.value,
-        year: new Date().getFullYear(),
-      })
+      if (leave.type === 'sabbatical') {
+        const fromDate = new Date(leave.date_from + 'T00:00:00')
+        const toDate = new Date(leave.date_to + 'T00:00:00')
+        const sabbDays = Math.max(1, Math.round((toDate.getTime() - fromDate.getTime()) / 86400000))
+        const sabbMonths = Math.round(sabbDays / 30)
+        const workedMonths = Math.max(0, 12 - sabbMonths)
+        const newEarned = Math.round(20 * workedMonths / 12)
+        const newSick = Math.round(7 * workedMonths / 12)
+        await supabaseAdmin.from('leave_balances').delete()
+          .eq('user_id', leave.user_id).in('leave_type', ['earned', 'sick'])
+        await supabaseAdmin.from('leave_balances').insert([
+          { user_id: leave.user_id, leave_type: 'earned', allocated: newEarned, balance: newEarned, year: new Date().getFullYear() },
+          { user_id: leave.user_id, leave_type: 'sick', allocated: newSick, balance: newSick, year: new Date().getFullYear() },
+        ])
+      } else {
+        const { data: balRows } = await supabaseAdmin
+          .from('leave_balances').select('balance, allocated')
+          .eq('user_id', leave.user_id).eq('leave_type', leave.type)
+        const bal = (balRows ?? [])[0] ?? null
+        await supabaseAdmin.from('leave_balances').delete()
+          .eq('user_id', leave.user_id).eq('leave_type', leave.type)
+        await supabaseAdmin.from('leave_balances').insert({
+          user_id: leave.user_id,
+          leave_type: leave.type,
+          allocated: bal?.allocated ?? 0,
+          balance: (bal?.balance ?? 0) - leave.value,
+          year: new Date().getFullYear(),
+        })
+      }
     }
 
     await loadData()
@@ -608,10 +624,28 @@ export default function AdminPage() {
     await loadData()
   }
 
+  async function applyProratedLeave(userId: string, doj: string) {
+    const d = new Date(doj + 'T00:00:00')
+    const currentYear = new Date().getFullYear()
+    if (d.getFullYear() !== currentYear) return
+    const monthsRemaining = 12 - d.getMonth()
+    const earnedAlloc = Math.round(20 * monthsRemaining / 12)
+    const sickAlloc = Math.round(7 * monthsRemaining / 12)
+    await supabaseAdmin.from('leave_balances').delete()
+      .eq('user_id', userId).in('leave_type', ['earned', 'sick'])
+    await supabaseAdmin.from('leave_balances').insert([
+      { user_id: userId, leave_type: 'earned', allocated: earnedAlloc, balance: earnedAlloc, year: currentYear },
+      { user_id: userId, leave_type: 'sick', allocated: sickAlloc, balance: sickAlloc, year: currentYear },
+    ])
+  }
+
   async function saveJoiningDate(id: string) {
     setJoiningEditSaving(true)
     await supabaseAdmin.from('users').update({ date_of_joining: joiningEditDate || null }).eq('id', id)
-    if (joiningEditDate) await generate2026Reviews(id, joiningEditDate, true)
+    if (joiningEditDate) {
+      await generate2026Reviews(id, joiningEditDate, true)
+      await applyProratedLeave(id, joiningEditDate)
+    }
     setEditingJoiningId(null)
     await loadData()
     setJoiningEditSaving(false)

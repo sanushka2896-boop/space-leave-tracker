@@ -40,6 +40,7 @@ export default function ApplyLeave() {
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [userDOJ, setUserDOJ] = useState<string | null>(null)
   const router = useRouter()
 
   useEffect(() => {
@@ -48,12 +49,13 @@ export default function ApplyLeave() {
       setUser(session.user)
 
       const { data: dbUser } = await supabaseAdmin
-        .from('users').select('id, is_admin, role').eq('email', session.user.email).single()
+        .from('users').select('id, is_admin, role, date_of_joining').eq('email', session.user.email).single()
       if (!dbUser) return
 
       setUserId(dbUser.id)
       setIsAdmin(dbUser.is_admin ?? false)
       setUserRole(dbUser.role ?? null)
+      setUserDOJ((dbUser as any).date_of_joining ?? null)
 
       const [{ data: types }, { data: balRows }] = await Promise.all([
         supabaseAdmin.from('leave_types').select('key, label, default_days, requires_docs, is_active, sort_order')
@@ -94,10 +96,29 @@ export default function ApplyLeave() {
     ? calcWorkingDays(form.date_from, form.date_to)
     : form.halfDay ? 0.5 : 1
 
+  const isSabbaticalEligible = (() => {
+    if (!userDOJ) return false
+    const doj = new Date(userDOJ + 'T00:00:00')
+    const now = new Date()
+    const months = (now.getFullYear() - doj.getFullYear()) * 12 + (now.getMonth() - doj.getMonth())
+    return months >= 18
+  })()
+
+  const matAutoDays = form.type === 'maternity' ? 56 : form.type === 'miscarriage' ? 42 : null
+  const matMaxDate = (matAutoDays !== null && form.date_from)
+    ? (() => { const d = new Date(form.date_from + 'T00:00:00'); d.setDate(d.getDate() + matAutoDays - 1); return d.toISOString().split('T')[0] })()
+    : undefined
+
   function handleDateChange(field: 'date_from' | 'date_to', val: string) {
     const updated = { ...form, [field]: val }
-    const from = field === 'date_from' ? val : form.date_from
-    const to = field === 'date_to' ? val : form.date_to
+    const autoDays = form.type === 'maternity' ? 56 : form.type === 'miscarriage' ? 42 : null
+    if (field === 'date_from' && autoDays !== null && val) {
+      const end = new Date(val + 'T00:00:00')
+      end.setDate(end.getDate() + autoDays - 1)
+      updated.date_to = end.toISOString().split('T')[0]
+    }
+    const from = updated.date_from
+    const to = updated.date_to
     if (from && to && from !== to) updated.halfDay = false
     setForm(updated)
   }
@@ -205,6 +226,15 @@ export default function ApplyLeave() {
                   </p>
                 </div>
               )}
+
+              {/* Sabbatical eligibility warning */}
+              {isSabbatical && !isSabbaticalEligible && (
+                <div className="mt-3 border border-red-200 bg-red-50 px-4 py-3">
+                  <p className="text-[10px] tracking-[0.15em] uppercase text-red-500">
+                    Sabbatical requires 1.5+ years of service — you are not yet eligible
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Sabbatical: duration input */}
@@ -252,10 +282,20 @@ export default function ApplyLeave() {
                     <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">To</label>
                     <input type="date" value={form.date_to}
                       min={form.date_from || undefined}
+                      max={matMaxDate}
                       onChange={e => handleDateChange('date_to', e.target.value)}
                       className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs text-[#1a1a1a] focus:outline-none" />
                   </div>
                 </div>
+
+                {/* Maternity / miscarriage auto-date info */}
+                {matAutoDays !== null && form.date_from && form.date_to && (
+                  <div className="border border-amber-200 bg-amber-50 px-4 py-3">
+                    <p className="text-[10px] tracking-[0.15em] uppercase text-amber-700">
+                      End date auto-set to {matAutoDays} calendar days — you may reduce it but not extend
+                    </p>
+                  </div>
+                )}
 
                 {/* Half-day: single-day only */}
                 {!isMultiDay && form.date_from && (
@@ -305,7 +345,7 @@ export default function ApplyLeave() {
             {error && <p className="text-xs text-red-400 tracking-wider">{error}</p>}
 
             <button onClick={handleSubmit}
-              disabled={submitting || !form.date_from || effectiveValue <= 0}
+              disabled={submitting || !form.date_from || effectiveValue <= 0 || (isSabbatical && !isSabbaticalEligible)}
               className="w-full py-3 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all duration-300 cursor-pointer disabled:opacity-40">
               {submitting ? 'Submitting…' : 'Submit Request'}
             </button>

@@ -19,7 +19,6 @@ type Leave = {
   id: string; type: string; date_from: string; date_to: string
   value: number; reason: string | null; status: string; rejection_reason: string | null
 }
-type EditState = { type: string; date_from: string; date_to: string; value: string; reason: string }
 
 type Review = {
   id: string
@@ -66,13 +65,9 @@ export default function ProfilePage() {
   const [saveError, setSaveError] = useState('')
 
   // Leaves tab
-  const [upcomingLeaves, setUpcomingLeaves] = useState<Leave[]>([])
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editState, setEditState] = useState<EditState>({ type: '', date_from: '', date_to: '', value: '1', reason: '' })
-  const [leaveSaving, setLeaveSaving] = useState(false)
-
-  // Logs tab
   const [allLeaves, setAllLeaves] = useState<Leave[]>([])
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [pastCollapsed, setPastCollapsed] = useState(true)
 
   // Reviews tab
   const [reviews, setReviews] = useState<Review[]>([])
@@ -89,18 +84,9 @@ export default function ProfilePage() {
   }, [])
 
   async function loadLeaves(uid: string) {
-    const today = new Date().toISOString().split('T')[0]
-    const [{ data: upcoming }, { data: all }] = await Promise.all([
-      supabaseAdmin.from('leaves').select('id, type, date_from, date_to, value, reason, status, rejection_reason')
-        .eq('user_id', uid).in('status', ['approved', 'pending'])
-        .order('date_from', { ascending: true }),
-      supabaseAdmin.from('leaves').select('id, type, date_from, date_to, value, reason, status, rejection_reason')
-        .eq('user_id', uid).order('created_at', { ascending: false }),
-    ])
-    const filtered = (upcoming ?? []).filter((l: any) =>
-      l.status === 'pending' || (l.status === 'approved' && l.date_from >= today)
-    )
-    setUpcomingLeaves(filtered as Leave[])
+    const { data: all } = await supabaseAdmin.from('leaves')
+      .select('id, type, date_from, date_to, value, reason, status, rejection_reason')
+      .eq('user_id', uid).order('date_from', { ascending: false })
     setAllLeaves((all ?? []) as Leave[])
   }
 
@@ -151,39 +137,31 @@ export default function ProfilePage() {
     else setSaved(true)
   }
 
-  async function cancelLeave(id: string) {
-    setLeaveSaving(true)
-    const leave = upcomingLeaves.find(l => l.id === id)
-    await supabaseAdmin.from('leaves').update({ status: 'cancelled' }).eq('id', id).eq('user_id', userId)
-    if (leave?.status === 'approved') {
+  function canDeleteLeave(leave: Leave, today: string): boolean {
+    if (leave.type !== 'sick') return false
+    if (isAdmin) return true
+    return leave.date_from >= today || leave.status === 'pending'
+  }
+
+  async function deleteLeave(id: string, today: string) {
+    setDeletingId(id)
+    const leave = allLeaves.find(l => l.id === id)
+    if (leave?.status === 'approved' && leave.type === 'sick') {
       const { data: bal } = await supabaseAdmin
         .from('leave_balances').select('balance, allocated')
-        .eq('user_id', userId).eq('leave_type', leave.type).maybeSingle()
-      await supabaseAdmin.from('leave_balances').upsert({
-        user_id: userId,
-        leave_type: leave.type,
-        allocated: bal?.allocated ?? 0,
-        balance: (bal?.balance ?? 0) + leave.value,
-      })
+        .eq('user_id', userId).eq('leave_type', 'sick').maybeSingle()
+      if (bal) {
+        await supabaseAdmin.from('leave_balances').upsert({
+          user_id: userId,
+          leave_type: 'sick',
+          allocated: bal.allocated,
+          balance: bal.balance + leave.value,
+        })
+      }
     }
+    await supabaseAdmin.from('leaves').delete().eq('id', id).eq('user_id', userId)
     await loadLeaves(userId)
-    setLeaveSaving(false)
-  }
-
-  function startEdit(leave: Leave) {
-    setEditingId(leave.id)
-    setEditState({ type: leave.type, date_from: leave.date_from, date_to: leave.date_to, value: String(leave.value), reason: leave.reason || '' })
-  }
-
-  async function saveEdit(id: string) {
-    setLeaveSaving(true)
-    await supabaseAdmin.from('leaves').update({
-      type: editState.type, date_from: editState.date_from, date_to: editState.date_to,
-      reason: editState.reason, value: parseFloat(editState.value),
-    }).eq('id', id).eq('user_id', userId)
-    setEditingId(null)
-    await loadLeaves(userId)
-    setLeaveSaving(false)
+    setDeletingId(null)
   }
 
   async function saveNote(reviewId: string) {
@@ -203,6 +181,16 @@ export default function ProfilePage() {
   const todayStr = new Date().toISOString().split('T')[0]
   const reviewsUpcoming = reviews.filter(r => r.date >= todayStr)
   const reviewsPast = [...reviews.filter(r => r.date < todayStr)].reverse()
+
+  const leavesOngoing = allLeaves.filter(l =>
+    !['cancelled', 'rejected'].includes(l.status) && l.date_from <= todayStr && l.date_to >= todayStr
+  )
+  const leavesUpcoming = allLeaves
+    .filter(l => ['approved', 'pending'].includes(l.status) && l.date_from > todayStr)
+    .sort((a, b) => a.date_from.localeCompare(b.date_from))
+  const leavesPast = allLeaves
+    .filter(l => ['cancelled', 'rejected'].includes(l.status) || l.date_to < todayStr)
+    .sort((a, b) => b.date_from.localeCompare(a.date_from))
 
   const TAB_LABELS: { key: Tab; label: string }[] = [
     { key: 'profile', label: 'Profile' },
@@ -286,87 +274,119 @@ export default function ProfilePage() {
 
         {/* Leaves Tab */}
         {activeTab === 'leaves' && (
-          <div>
-            <div className="flex items-center justify-between mb-5">
-              <p className="text-xs text-[#888] tracking-wider">Upcoming and pending leaves</p>
+          <div className="space-y-8">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-[#888] tracking-wider">Your leave requests</p>
               <button onClick={() => router.push('/apply')}
                 className="px-6 py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all cursor-pointer">
                 Apply for Leave
               </button>
             </div>
-            {upcomingLeaves.length === 0 ? (
-              <p className="text-sm text-[#bbb] tracking-wider">No upcoming or pending leaves.</p>
-            ) : (
-              <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
-                {upcomingLeaves.map(leave => (
-                  <div key={leave.id}>
-                    {editingId === leave.id ? (
-                      <div className="px-8 py-6 space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Type</label>
-                            <select value={editState.type} onChange={e => setEditState({ ...editState, type: e.target.value })}
-                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
-                              <option value="sick">Sick Leave</option>
-                              <option value="earned">Earned Leave</option>
-                              <option value="wfh">WFH</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Duration</label>
-                            <select value={editState.value} onChange={e => setEditState({ ...editState, value: e.target.value })}
-                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
-                              <option value="1">Full Day</option>
-                              <option value="0.5">Half Day</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">From</label>
-                            <input type="date" value={editState.date_from} onChange={e => setEditState({ ...editState, date_from: e.target.value })}
-                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                          </div>
-                          <div>
-                            <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">To</label>
-                            <input type="date" value={editState.date_to} onChange={e => setEditState({ ...editState, date_to: e.target.value })}
-                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Reason</label>
-                          <input type="text" value={editState.reason} onChange={e => setEditState({ ...editState, reason: e.target.value })}
-                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                        </div>
-                        <div className="flex gap-3">
-                          <button onClick={() => saveEdit(leave.id)} disabled={leaveSaving}
-                            className="px-6 py-2 border border-[#1a1a1a] text-xs tracking-wider uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">Save</button>
-                          <button onClick={() => setEditingId(null)}
-                            className="px-6 py-2 border border-[#ddd] text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer">Cancel</button>
-                        </div>
+
+            {allLeaves.length === 0 && (
+              <p className="text-sm text-[#bbb] tracking-wider">No leave records yet.</p>
+            )}
+
+            {/* ONGOING */}
+            {leavesOngoing.length > 0 && (
+              <div>
+                <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-4">Ongoing</h3>
+                <div className="border border-emerald-200 bg-emerald-50/40 divide-y divide-[#eee]">
+                  {leavesOngoing.map(leave => (
+                    <div key={leave.id} className="px-8 py-5 flex items-center justify-between">
+                      <div>
+                        <p className="text-xs tracking-[0.2em] uppercase text-[#1a1a1a]">{leave.type} leave</p>
+                        <p className="text-xs text-[#888] mt-1">
+                          {fmtShort(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmtShort(leave.date_to)}` : ''}
+                          {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
+                        </p>
                       </div>
-                    ) : (
-                      <div className="px-8 py-5 flex items-center justify-between">
-                        <div>
-                          <p className="text-xs tracking-[0.2em] uppercase text-[#1a1a1a]">{leave.type} leave</p>
-                          <p className="text-xs text-[#888] mt-1">
-                            {fmtShort(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmtShort(leave.date_to)}` : ''}
-                            {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          {leave.status === 'pending' && (
-                            <button onClick={() => startEdit(leave)}
-                              className="text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer">Modify</button>
-                          )}
-                          <button onClick={() => cancelLeave(leave.id)} disabled={leaveSaving}
-                            className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">Cancel</button>
-                          <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
-                            {leave.status}
-                          </span>
-                        </div>
+                      <div className="flex items-center gap-4">
+                        <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                          {leave.status}
+                        </span>
+                        {canDeleteLeave(leave, todayStr) && (
+                          <button onClick={() => deleteLeave(leave.id, todayStr)} disabled={deletingId === leave.id}
+                            className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">
+                            {deletingId === leave.id ? '…' : 'Delete'}
+                          </button>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* UPCOMING */}
+            <div>
+              <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-4">Upcoming</h3>
+              {leavesUpcoming.length === 0 ? (
+                <p className="text-sm text-[#bbb] tracking-wider">No upcoming leaves.</p>
+              ) : (
+                <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
+                  {leavesUpcoming.map(leave => (
+                    <div key={leave.id} className="px-8 py-5 flex items-center justify-between">
+                      <div>
+                        <p className="text-xs tracking-[0.2em] uppercase text-[#1a1a1a]">{leave.type} leave</p>
+                        <p className="text-xs text-[#888] mt-1">
+                          {fmtShort(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmtShort(leave.date_to)}` : ''}
+                          {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                          {leave.status}
+                        </span>
+                        {canDeleteLeave(leave, todayStr) && (
+                          <button onClick={() => deleteLeave(leave.id, todayStr)} disabled={deletingId === leave.id}
+                            className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">
+                            {deletingId === leave.id ? '…' : 'Delete'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* PAST */}
+            {leavesPast.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xs tracking-[0.3em] uppercase text-[#888]">Past</h3>
+                  {leavesPast.length > 5 && (
+                    <button onClick={() => setPastCollapsed(c => !c)}
+                      className="text-xs text-[#aaa] hover:text-[#1a1a1a] cursor-pointer tracking-wider">
+                      {pastCollapsed ? `Show all (${leavesPast.length})` : 'Collapse'}
+                    </button>
+                  )}
+                </div>
+                <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
+                  {(pastCollapsed ? leavesPast.slice(0, 5) : leavesPast).map(leave => (
+                    <div key={leave.id} className="px-8 py-5 flex items-center justify-between">
+                      <div>
+                        <p className="text-xs tracking-[0.2em] uppercase text-[#888]">{leave.type} leave</p>
+                        <p className="text-xs text-[#bbb] mt-1">
+                          {fmtShort(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmtShort(leave.date_to)}` : ''}
+                          {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                          {leave.status}
+                        </span>
+                        {canDeleteLeave(leave, todayStr) && (
+                          <button onClick={() => deleteLeave(leave.id, todayStr)} disabled={deletingId === leave.id}
+                            className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">
+                            {deletingId === leave.id ? '…' : 'Delete'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
