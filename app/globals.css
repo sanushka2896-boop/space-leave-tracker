@@ -24,3 +24,70 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ── Dark mode overrides ── */
+html.dark body { background-color: #0f0f0f; color: #f0ede8; }
+
+/* Backgrounds */
+html.dark .bg-\[\#F5F2EE\] { background-color: #0f0f0f; }
+html.dark .bg-white        { background-color: #1a1a1a; }
+html.dark .bg-\[\#fafafa\] { background-color: #222; }
+html.dark .bg-\[\#fafaf9\] { background-color: #1d1d1d; }
+html.dark .bg-\[\#f8f6f3\] { background-color: #222; }
+html.dark .bg-\[\#f5f5f5\] { background-color: #1e1e1e; }
+
+/* Borders */
+html.dark .border-\[\#ddd\]    { border-color: #2a2a2a; }
+html.dark .border-\[\#eee\]    { border-color: #222; }
+html.dark .border-\[\#1a1a1a\] { border-color: #f0ede8; }
+
+/* Dividers */
+html.dark .divide-\[\#eee\]    > :not([hidden]) ~ :not([hidden]) { border-color: #222; }
+html.dark .divide-\[\#f5f5f5\] > :not([hidden]) ~ :not([hidden]) { border-color: #1e1e1e; }
+
+/* Text */
+html.dark .text-\[\#1a1a1a\] { color: #f0ede8; }
+html.dark .text-\[\#888\]    { color: #888; }
+html.dark .text-\[\#aaa\]    { color: #666; }
+html.dark .text-\[\#bbb\]    { color: #555; }
+
+/* Hover + interactive */
+html.dark .hover\:bg-\[\#fafafa\]:hover  { background-color: #282828; }
+html.dark .hover\:bg-\[\#1a1a1a\]:hover  { background-color: #f0ede8; }
+html.dark .hover\:text-\[\#1a1a1a\]:hover { color: #f0ede8; }
+html.dark .hover\:text-\[\#F5F2EE\]:hover { color: #0f0f0f; }
+
+/* All form inputs/selects/textareas */
+html.dark input:not([type='checkbox']):not([type='radio']):not([type='file']),
+html.dark select,
+html.dark textarea {
+  background-color: #1f1f1f;
+  border-color: #2a2a2a;
+  color: #f0ede8;
+}
+html.dark input[type='date'],
+html.dark input[type='time'] { color-scheme: dark; }
+html.dark input::placeholder,
+html.dark textarea::placeholder { color: #444; }
+
+/* Status badge backgrounds */
+html.dark .bg-amber-50         { background-color: #2a1f00; }
+html.dark .bg-emerald-50       { background-color: #002a1a; }
+html.dark .bg-red-50           { background-color: #2a0000; }
+html.dark .bg-emerald-50\/40   { background-color: rgba(0, 42, 26, 0.4); }
+
+/* Status badge borders */
+html.dark .border-amber-200   { border-color: #6b4c00; }
+html.dark .border-emerald-200 { border-color: #005a30; }
+html.dark .border-red-200     { border-color: #5a0000; }
+
+/* Status text — brighten slightly for dark bg */
+html.dark .text-amber-600  { color: #ffb300; }
+html.dark .text-amber-700  { color: #ffb300; }
+html.dark .text-emerald-600 { color: #4ade80; }
+html.dark .text-red-400    { color: #f87171; }
+html.dark .text-red-500    { color: #f87171; }
+html.dark .text-red-600    { color: #f87171; }
+
+/* Nav sticky header */
+html.dark header { background-color: #1a1a1a; border-color: #2a2a2a; }

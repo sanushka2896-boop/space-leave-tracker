@@ -19,6 +19,12 @@ type OvertimeEntry = {
   approved: boolean; approved_by: string | null; rejection_reason: string | null
   created_at: string; users?: { name: string } | null
 }
+type BalanceLog = {
+  id: string; user_id: string; log_date: string
+  ot_minutes_used: number; late_minutes_cancelled: number; net_minutes: number
+  note: string | null; created_at: string
+  users?: { name: string } | null
+}
 type TeamMember = { id: string; name: string; email: string }
 type OTForm = { date: string; login_time: string; logout_time: string; extra_hours_start: string; extra_hours_end: string; reason: string; compensated_by: string }
 
@@ -72,6 +78,29 @@ function minsLateFrom10(t: string): number {
   const [h, m] = t.split(':').map(Number)
   return Math.max(0, h * 60 + m - 10 * 60)
 }
+function parseOTDuration(s: string | null): number {
+  if (!s) return 0
+  let mins = 0
+  const hrMatch = s.match(/(\d+)\s*hr/)
+  const minMatch = s.match(/(\d+)\s*min/)
+  if (hrMatch) mins += parseInt(hrMatch[1]) * 60
+  if (minMatch) mins += parseInt(minMatch[1])
+  return mins
+}
+function parseDDMMYYYY(s: string): string {
+  const parts = s.trim().split('/')
+  if (parts.length !== 3) return s.trim()
+  const [d, m, y] = parts
+  return `${y.trim()}-${m.trim().padStart(2, '0')}-${d.trim().padStart(2, '0')}`
+}
+function fmtMins(m: number): string {
+  if (m === 0) return '0m'
+  const h = Math.floor(Math.abs(m) / 60)
+  const mn = Math.abs(m) % 60
+  if (h === 0) return `${mn}m`
+  if (mn === 0) return `${h}h`
+  return `${h}h ${mn}m`
+}
 
 const PTO_OPTIONS = ['Pending', 'Made Up Time', 'PTO Deducted'] as const
 function ptoBadgeCls(v: string) {
@@ -102,6 +131,8 @@ export default function AttendancePage() {
   const [addLateSaving, setAddLateSaving] = useState(false)
   const [addLateErr, setAddLateErr] = useState('')
   const [deletingLateId, setDeletingLateId] = useState<string | null>(null)
+  const [lateImporting, setLateImporting] = useState(false)
+  const [lateImportErrs, setLateImportErrs] = useState<string[]>([])
 
   // Overtime
   const [overtimeEntries, setOvertimeEntries] = useState<OvertimeEntry[]>([])
@@ -113,6 +144,13 @@ export default function AttendancePage() {
   const [editOTSaving, setEditOTSaving] = useState(false)
   const [editOTErr, setEditOTErr] = useState('')
   const [deletingOTId, setDeletingOTId] = useState<string | null>(null)
+  const [otImporting, setOtImporting] = useState(false)
+  const [otImportErrs, setOtImportErrs] = useState<string[]>([])
+
+  // Balance logs
+  const [balanceLogs, setBalanceLogs] = useState<BalanceLog[]>([])
+  const [showBalanceLogs, setShowBalanceLogs] = useState(false)
+  const [generatingLogs, setGeneratingLogs] = useState(false)
 
   async function loadClockLogs(uid: string, adminFlag: boolean) {
     const today = getISTDate()
@@ -156,6 +194,12 @@ export default function AttendancePage() {
     }
   }
 
+  async function loadBalanceLogs() {
+    const { data } = await supabaseAdmin.from('attendance_balance_logs')
+      .select('*, users(name)').order('created_at', { ascending: false })
+    setBalanceLogs((data ?? []) as BalanceLog[])
+  }
+
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) { router.push('/'); return }
@@ -169,7 +213,12 @@ export default function AttendancePage() {
         const { data: usersData } = await supabaseAdmin.from('users').select('id, name, email').order('name')
         setTeam(usersData ?? [])
       }
-      await Promise.all([loadClockLogs(dbUser.id, adminFlag), loadLate(), loadOvertime(dbUser.id, adminFlag)])
+      await Promise.all([
+        loadClockLogs(dbUser.id, adminFlag),
+        loadLate(),
+        loadOvertime(dbUser.id, adminFlag),
+        loadBalanceLogs(),
+      ])
       setLoading(false)
     })
   }, [])
@@ -290,6 +339,128 @@ export default function AttendancePage() {
     return groups
   }
 
+  // Compute per-employee late + OT stats from current loaded data
+  function computeBalance() {
+    const lateMap: Record<string, { name: string; count: number; totalMins: number }> = {}
+    for (const row of lateArrivals) {
+      if (!lateMap[row.user_id]) lateMap[row.user_id] = { name: (row.users as any)?.name || '—', count: 0, totalMins: 0 }
+      lateMap[row.user_id].count++
+      lateMap[row.user_id].totalMins += row.minutes_late ?? 0
+    }
+    const otMap: Record<string, { name: string; count: number; totalMins: number }> = {}
+    for (const e of overtimeEntries) {
+      if (!otMap[e.user_id]) otMap[e.user_id] = { name: (e.users as any)?.name || '—', count: 0, totalMins: 0 }
+      otMap[e.user_id].count++
+      otMap[e.user_id].totalMins += parseOTDuration(e.overtime_duration)
+    }
+    return { lateMap, otMap }
+  }
+
+  async function generateBalanceLogs() {
+    setGeneratingLogs(true)
+    const today = getISTDate()
+    const { lateMap, otMap } = computeBalance()
+    const allUids = new Set([...Object.keys(lateMap), ...Object.keys(otMap)])
+    for (const uid of allUids) {
+      const lateMins = lateMap[uid]?.totalMins ?? 0
+      const otMins = otMap[uid]?.totalMins ?? 0
+      if (lateMins === 0 && otMins === 0) continue
+      const otUsed = Math.min(otMins, lateMins)
+      const lateCancelled = Math.min(lateMins, otMins)
+      const net = otMins - lateMins
+      const note = `${today} — OT offset applied: ${fmtMins(otUsed)} OT cancelled ${fmtMins(lateCancelled)} late. Remaining: ${net < 0 ? fmtMins(Math.abs(net)) + ' late' : '0 late'} / ${net > 0 ? fmtMins(net) + ' OT' : '0 OT'}`
+      await supabaseAdmin.from('attendance_balance_logs').insert({
+        user_id: uid, log_date: today,
+        ot_minutes_used: otUsed, late_minutes_cancelled: lateCancelled, net_minutes: net, note,
+      })
+    }
+    await loadBalanceLogs()
+    setGeneratingLogs(false)
+  }
+
+  async function handleLateCsvImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLateImportErrs([])
+    const text = await file.text()
+    const lines = text.trim().split('\n').filter(l => l.trim())
+    if (lines.length < 2) { setLateImportErrs(['CSV empty or missing data rows.']); e.target.value = ''; return }
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''))
+    const nameIdx = headers.indexOf('employee_name')
+    const dateIdx = headers.indexOf('date')
+    const timeIdx = headers.indexOf('arrival_time')
+    const reasonIdx = headers.indexOf('reason')
+    if (nameIdx === -1 || dateIdx === -1 || timeIdx === -1) {
+      setLateImportErrs(['CSV must have columns: employee_name, date, arrival_time, reason'])
+      e.target.value = ''
+      return
+    }
+    setLateImporting(true)
+    const errs: string[] = []
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''))
+      const name = cols[nameIdx]; const dateRaw = cols[dateIdx]; const arrivalTime = cols[timeIdx]
+      const reason = reasonIdx !== -1 ? cols[reasonIdx] : ''
+      if (!name || !dateRaw || !arrivalTime) { errs.push(`Row ${i + 1}: missing required fields`); continue }
+      const member = team.find(m => m.name?.toLowerCase() === name.toLowerCase())
+      if (!member) { errs.push(`Row ${i + 1}: employee "${name}" not found`); continue }
+      const date = parseDDMMYYYY(dateRaw)
+      const { error } = await supabaseAdmin.from('late_arrivals').insert({
+        user_id: member.id, date, arrival_time: arrivalTime,
+        minutes_late: minsLateFrom10(arrivalTime), reason: reason || null,
+        pto_deduction_status: 'Pending', approved: false,
+      })
+      if (error) errs.push(`Row ${i + 1}: ${error.message}`)
+    }
+    e.target.value = ''
+    await loadLate()
+    setLateImporting(false)
+    setLateImportErrs(errs)
+  }
+
+  async function handleOtCsvImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setOtImportErrs([])
+    const text = await file.text()
+    const lines = text.trim().split('\n').filter(l => l.trim())
+    if (lines.length < 2) { setOtImportErrs(['CSV empty or missing data rows.']); e.target.value = ''; return }
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''))
+    const nameIdx = headers.indexOf('employee_name')
+    const dateIdx = headers.indexOf('date')
+    const startIdx = headers.indexOf('extra_hours_start')
+    const endIdx = headers.indexOf('extra_hours_end')
+    const reasonIdx = headers.indexOf('reason')
+    if (nameIdx === -1 || dateIdx === -1 || startIdx === -1 || endIdx === -1) {
+      setOtImportErrs(['CSV must have columns: employee_name, date, extra_hours_start, extra_hours_end, reason'])
+      e.target.value = ''
+      return
+    }
+    setOtImporting(true)
+    const errs: string[] = []
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''))
+      const name = cols[nameIdx]; const dateRaw = cols[dateIdx]
+      const extraStart = cols[startIdx]; const extraEnd = cols[endIdx]
+      const reason = reasonIdx !== -1 ? cols[reasonIdx] : ''
+      if (!name || !dateRaw || !extraStart || !extraEnd) { errs.push(`Row ${i + 1}: missing required fields`); continue }
+      const member = team.find(m => m.name?.toLowerCase() === name.toLowerCase())
+      if (!member) { errs.push(`Row ${i + 1}: employee "${name}" not found`); continue }
+      const date = parseDDMMYYYY(dateRaw)
+      const overtime_duration = calcOvertimeFromExtraHours(extraStart, extraEnd)
+      const { error } = await supabaseAdmin.from('overtime_entries').insert({
+        user_id: member.id, date, login_time: null, logout_time: null,
+        extra_hours_start: extraStart, extra_hours_end: extraEnd,
+        overtime_duration, reason: reason || null, approved: false,
+      })
+      if (error) errs.push(`Row ${i + 1}: ${error.message}`)
+    }
+    e.target.value = ''
+    await loadOvertime(userId, isAdmin)
+    setOtImporting(false)
+    setOtImportErrs(errs)
+  }
+
   const previewOT = otForm.logout_time
     ? calcOT(otForm.logout_time, otForm.extra_hours_start, otForm.extra_hours_end)
     : null
@@ -299,11 +470,22 @@ export default function AttendancePage() {
 
   if (loading) return null
 
+  // ── Compute per-employee summaries for display ──
+  const { lateMap, otMap } = computeBalance()
+  const getNet = (uid: string) => (otMap[uid]?.totalMins ?? 0) - (lateMap[uid]?.totalMins ?? 0)
+
+  const lateSummaryRows = Object.entries(lateMap)
+    .map(([uid, s]) => ({ uid, ...s, net: getNet(uid) }))
+    .sort((a, b) => b.totalMins - a.totalMins)
+
+  const otSummaryRows = Object.entries(otMap)
+    .map(([uid, s]) => ({ uid, ...s, net: getNet(uid) }))
+    .sort((a, b) => b.totalMins - a.totalMins)
+
   const Th = ({ label }: { label: string }) => (
     <th className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{label}</th>
   )
 
-  // column counts: non-admin OT = 10, admin OT = 10 (Name replaces actions)
   const otColSpan = 10
 
   return (
@@ -380,9 +562,118 @@ export default function AttendancePage() {
         {/* ══ TAB 2: LATE ARRIVALS ══ */}
         {tab === 'late' && (
           <>
+            {/* Summary bar */}
+            {lateSummaryRows.length > 0 && (
+              <div className="mb-6">
+                <p className="text-[10px] tracking-[0.25em] uppercase text-[#888] mb-3">Late Arrivals Summary</p>
+                <div className="border border-[#ddd] bg-white overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-[#eee] bg-[#fafafa]">
+                        <Th label="Name" />
+                        <Th label="Total Late Occurrences" />
+                        <Th label="Total Minutes Late" />
+                        <Th label="Net Late (after OT offset)" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#f5f5f5]">
+                      {lateSummaryRows.map(row => {
+                        const net = row.net
+                        return (
+                          <tr key={row.uid} className="hover:bg-[#fafafa]">
+                            <td className="px-4 py-2.5 text-xs text-[#1a1a1a]">{row.name}</td>
+                            <td className="px-4 py-2.5 text-xs text-[#888]">{row.count}</td>
+                            <td className="px-4 py-2.5 text-xs text-amber-600">{fmtMins(row.totalMins)}</td>
+                            <td className="px-4 py-2.5 text-xs">
+                              {net >= 0
+                                ? <span className="text-emerald-600">Clear — {fmtMins(net)} OT surplus</span>
+                                : <span className="text-amber-600">{fmtMins(Math.abs(net))} remaining</span>}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Balance logs collapsible */}
+                <div className="mt-4">
+                  <button
+                    onClick={() => setShowBalanceLogs(!showBalanceLogs)}
+                    className="flex items-center gap-2 text-[10px] tracking-[0.2em] uppercase text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer"
+                  >
+                    <span>{showBalanceLogs ? '▲' : '▼'}</span>
+                    <span>Balance Logs</span>
+                    {balanceLogs.length > 0 && <span className="text-[#bbb]">({balanceLogs.length})</span>}
+                  </button>
+
+                  {showBalanceLogs && (
+                    <div className="mt-3 border border-[#ddd] bg-white">
+                      <div className="px-5 py-3 border-b border-[#eee] flex items-center justify-between">
+                        <p className="text-[10px] tracking-[0.2em] uppercase text-[#888]">OT ↔ Late offset history</p>
+                        {isAdmin && (
+                          <button
+                            onClick={generateBalanceLogs}
+                            disabled={generatingLogs}
+                            className="px-4 py-1.5 border border-[#1a1a1a] text-[10px] tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
+                          >
+                            {generatingLogs ? 'Generating…' : 'Generate Balance Log'}
+                          </button>
+                        )}
+                      </div>
+                      {balanceLogs.length === 0 ? (
+                        <p className="px-5 py-4 text-xs text-[#bbb] tracking-wider">No balance logs yet. Click "Generate Balance Log" to create a snapshot.</p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead>
+                              <tr className="border-b border-[#eee] bg-[#fafafa]">
+                                <Th label="Employee" />
+                                <Th label="Date" />
+                                <Th label="OT Used" />
+                                <Th label="Late Cancelled" />
+                                <Th label="Net" />
+                                <Th label="Note" />
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#f5f5f5]">
+                              {balanceLogs.map(log => (
+                                <tr key={log.id} className="hover:bg-[#fafafa]">
+                                  <td className="px-4 py-2.5 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>
+                                  <td className="px-4 py-2.5 text-xs text-[#888] whitespace-nowrap">{fmtDate(log.log_date)}</td>
+                                  <td className="px-4 py-2.5 text-xs text-emerald-600">{fmtMins(log.ot_minutes_used)}</td>
+                                  <td className="px-4 py-2.5 text-xs text-amber-600">{fmtMins(log.late_minutes_cancelled)}</td>
+                                  <td className="px-4 py-2.5 text-xs">
+                                    {log.net_minutes > 0
+                                      ? <span className="text-emerald-600">+{fmtMins(log.net_minutes)} OT</span>
+                                      : log.net_minutes < 0
+                                      ? <span className="text-amber-600">{fmtMins(Math.abs(log.net_minutes))} late</span>
+                                      : <span className="text-[#aaa]">Balanced</span>}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-[10px] text-[#aaa] max-w-[280px] leading-relaxed">{log.note || '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Add late + CSV import (admin only) */}
             {isAdmin && (
               <div className="border border-[#ddd] bg-white p-6 mb-6">
-                <p className="text-xs tracking-[0.2em] uppercase text-[#888] mb-4">Add Late Arrival</p>
+                <div className="flex items-center justify-between mb-4">
+                  <p className="text-xs tracking-[0.2em] uppercase text-[#888]">Add Late Arrival</p>
+                  <label className={`cursor-pointer border border-[#ddd] px-4 py-1.5 text-[10px] tracking-[0.2em] uppercase text-[#888] hover:border-[#aaa] transition-colors ${lateImporting ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                    {lateImporting ? 'Importing…' : 'Import CSV'}
+                    <input type="file" accept=".csv" className="hidden" onChange={handleLateCsvImport} disabled={lateImporting} />
+                  </label>
+                </div>
+                <p className="text-[10px] text-[#bbb] tracking-wider mb-4">CSV format: employee_name, date (dd/mm/yyyy), arrival_time (HH:MM), reason</p>
                 <div className="flex gap-3 flex-wrap items-end">
                   <div className="min-w-[150px]">
                     <label className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] block mb-1">Employee</label>
@@ -425,6 +716,11 @@ export default function AttendancePage() {
                   </button>
                 </div>
                 {addLateErr && <p className="text-xs text-red-400 mt-3">{addLateErr}</p>}
+                {lateImportErrs.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    {lateImportErrs.map((e, i) => <p key={i} className="text-xs text-red-400">{e}</p>)}
+                  </div>
+                )}
               </div>
             )}
 
@@ -504,9 +800,63 @@ export default function AttendancePage() {
         {/* ══ TAB 3: OVERTIME ══ */}
         {tab === 'overtime' && (
           <>
+            {/* Summary bar */}
+            {otSummaryRows.length > 0 && (
+              <div className="mb-6">
+                <p className="text-[10px] tracking-[0.25em] uppercase text-[#888] mb-3">Overtime Summary</p>
+                <div className="border border-[#ddd] bg-white overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-[#eee] bg-[#fafafa]">
+                        <Th label="Name" />
+                        <Th label="Total OT Occurrences" />
+                        <Th label="Total OT Hours" />
+                        <Th label="Net OT (after late offset)" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#f5f5f5]">
+                      {otSummaryRows.map(row => {
+                        const net = row.net
+                        return (
+                          <tr key={row.uid} className="hover:bg-[#fafafa]">
+                            <td className="px-4 py-2.5 text-xs text-[#1a1a1a]">{row.name}</td>
+                            <td className="px-4 py-2.5 text-xs text-[#888]">{row.count}</td>
+                            <td className="px-4 py-2.5 text-xs text-emerald-600">{fmtMins(row.totalMins)}</td>
+                            <td className="px-4 py-2.5 text-xs">
+                              {net > 0
+                                ? <span className="text-emerald-600">{fmtMins(net)} surplus</span>
+                                : net < 0
+                                ? <span className="text-amber-600">Used — {fmtMins(Math.abs(net))} late outstanding</span>
+                                : <span className="text-[#aaa]">Balanced</span>}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Submit form */}
             <div className="border border-[#ddd] bg-white p-6 mb-8">
-              <p className="text-xs tracking-[0.2em] uppercase text-[#888] mb-5">Log Overtime</p>
+              <div className="flex items-center justify-between mb-5">
+                <p className="text-xs tracking-[0.2em] uppercase text-[#888]">Log Overtime</p>
+                {isAdmin && (
+                  <label className={`cursor-pointer border border-[#ddd] px-4 py-1.5 text-[10px] tracking-[0.2em] uppercase text-[#888] hover:border-[#aaa] transition-colors ${otImporting ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                    {otImporting ? 'Importing…' : 'Import CSV'}
+                    <input type="file" accept=".csv" className="hidden" onChange={handleOtCsvImport} disabled={otImporting} />
+                  </label>
+                )}
+              </div>
+              {isAdmin && (
+                <p className="text-[10px] text-[#bbb] tracking-wider mb-4">CSV format: employee_name, date (dd/mm/yyyy), extra_hours_start (HH:MM), extra_hours_end (HH:MM), reason</p>
+              )}
+              {otImportErrs.length > 0 && (
+                <div className="mb-4 space-y-1">
+                  {otImportErrs.map((e, i) => <p key={i} className="text-xs text-red-400">{e}</p>)}
+                </div>
+              )}
 
               <div className="grid grid-cols-6 gap-4 mb-4">
                 <div className="col-span-2">
