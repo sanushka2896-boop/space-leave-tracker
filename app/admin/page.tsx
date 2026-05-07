@@ -547,32 +547,63 @@ export default function AdminPage() {
     setFlagDeducting(false)
   }
 
-  async function autoInsertReviews(userId: string, doj: string) {
-    await supabaseAdmin.from('reviews').delete().eq('user_id', userId)
-    const ords = ['1st', '2nd', '3rd', '4th', '5th']
-    const d = new Date(doj + 'T00:00:00')
-    const fmtDt = (dt: Date) => dt.toISOString().split('T')[0]
-    const rows: { user_id: string; date: string; type: string; notes: string }[] = []
-    for (let i = 1; i <= 5; i++) {
-      const dt = new Date(d); dt.setFullYear(dt.getFullYear() + i)
-      rows.push({ user_id: userId, date: fmtDt(dt), type: 'annual', notes: `${ords[i - 1]} Year Review` })
-    }
-    for (let i = 0; i < 5; i++) {
-      const dt = new Date(d); dt.setMonth(dt.getMonth() + 6 + i * 12)
-      rows.push({ user_id: userId, date: fmtDt(dt), type: 'bi-annual', notes: `${ords[i]} Bi-Annual Review` })
-    }
-    await supabaseAdmin.from('reviews').insert(rows)
+  function ordSuffix(n: number): string {
+    const s = ['th', 'st', 'nd', 'rd']
+    const v = n % 100
+    return n + (s[(v - 20) % 10] || s[v] || s[0])
   }
 
-  async function runRetroactiveReviews() {
+  async function generate2026Reviews(userId: string, doj: string, clearFirst = false) {
+    const TARGET = 2026
+    const d = new Date(doj + 'T00:00:00')
+    const dojYear = d.getFullYear()
+    const fmtDt = (dt: Date) => dt.toISOString().split('T')[0]
+
+    if (clearFirst) {
+      await supabaseAdmin.from('reviews').delete()
+        .eq('user_id', userId).gte('date', `${TARGET}-01-01`).lte('date', `${TARGET}-12-31`)
+    }
+
+    const toInsert: { date: string; type: string; notes: string }[] = []
+
+    // Annual: same month+day as DOJ but in 2026
+    const annualDt = new Date(TARGET, d.getMonth(), d.getDate())
+    if (annualDt.getFullYear() === TARGET) {
+      const yearsDiff = TARGET - dojYear
+      if (yearsDiff > 0) {
+        toInsert.push({ date: fmtDt(annualDt), type: 'annual', notes: `${ordSuffix(yearsDiff)} Year Review` })
+      }
+    }
+
+    // Bi-annual: DOJ + 6, 18, 30, ... months — only those that land in 2026
+    for (let bi = 1; bi <= 30; bi++) {
+      const baDt = new Date(d)
+      baDt.setMonth(baDt.getMonth() + 6 + (bi - 1) * 12)
+      const baYear = baDt.getFullYear()
+      if (baYear === TARGET) {
+        toInsert.push({ date: fmtDt(baDt), type: 'bi-annual', notes: `${ordSuffix(bi)} Bi-Annual Review` })
+      }
+      if (baYear > TARGET) break
+    }
+
+    for (const row of toInsert) {
+      const { data: existing } = await supabaseAdmin
+        .from('reviews').select('id').eq('user_id', userId).eq('date', row.date).maybeSingle()
+      if (!existing) {
+        await supabaseAdmin.from('reviews').insert({ user_id: userId, ...row })
+      }
+    }
+  }
+
+  async function runGenerate2026Reviews() {
     setRetroRunning(true)
     let count = 0
     for (const m of team) {
       if (!m.date_of_joining) continue
-      await autoInsertReviews(m.id, m.date_of_joining)
+      await generate2026Reviews(m.id, m.date_of_joining)
       count++
     }
-    setRetroResult(`Regenerated reviews for ${count} employee${count !== 1 ? 's' : ''}`)
+    setRetroResult(`Generated 2026 reviews for ${count} employee${count !== 1 ? 's' : ''}`)
     setRetroRunning(false)
     await loadData()
   }
@@ -580,7 +611,7 @@ export default function AdminPage() {
   async function saveJoiningDate(id: string) {
     setJoiningEditSaving(true)
     await supabaseAdmin.from('users').update({ date_of_joining: joiningEditDate || null }).eq('id', id)
-    if (joiningEditDate) await autoInsertReviews(id, joiningEditDate)
+    if (joiningEditDate) await generate2026Reviews(id, joiningEditDate, true)
     setEditingJoiningId(null)
     await loadData()
     setJoiningEditSaving(false)
@@ -1329,11 +1360,11 @@ export default function AdminPage() {
             {csvErr && <p className="text-xs text-red-400">{csvErr}</p>}
             {csvSuccess && <p className="text-xs text-emerald-600">{csvSuccess}</p>}
             <button
-              onClick={runRetroactiveReviews}
+              onClick={runGenerate2026Reviews}
               disabled={retroRunning}
               className="px-5 py-2 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
             >
-              {retroRunning ? 'Running…' : 'Retroactive Reviews'}
+              {retroRunning ? 'Running…' : 'Generate 2026 Reviews'}
             </button>
             {retroResult && <p className="text-xs text-emerald-600">{retroResult}</p>}
           </div>
@@ -1453,30 +1484,42 @@ export default function AdminPage() {
               </div>
             </div>
 
-            <div className="border border-[#ddd] bg-white divide-y divide-[#eee] max-h-96 overflow-y-auto">
+            <div className="border border-[#ddd] bg-white overflow-x-auto max-h-96 overflow-y-auto">
               {reviews.length === 0 ? (
                 <p className="p-6 text-xs text-[#bbb] tracking-wider">No reviews scheduled.</p>
-              ) : reviews.map(r => (
-                <div key={r.id} className="px-5 py-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-[#1a1a1a]">{r.users?.name || r.users?.email || 'Unknown'}</p>
-                      <p className="text-[10px] text-[#aaa] mt-0.5">{formatDate(r.date)} · {r.type}</p>
-                      {r.notes && <p className="text-[10px] text-[#888] mt-1 italic">{r.notes}</p>}
-                    </div>
-                    <div className="flex gap-3 ml-3 shrink-0">
-                      <button onClick={() => startEditReview(r)}
-                        className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
-                        Edit
-                      </button>
-                      <button onClick={() => deleteReview(r.id)}
-                        className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer">
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+              ) : (
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#eee]">
+                      {['Name', 'Review Type', 'Label', 'Date', ''].map(h => (
+                        <th key={h} className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f5f5f5]">
+                    {reviews.map(r => (
+                      <tr key={r.id} className="hover:bg-[#fafafa]">
+                        <td className="px-4 py-3 text-xs text-[#1a1a1a]">{r.users?.name || r.users?.email || 'Unknown'}</td>
+                        <td className="px-4 py-3 text-xs text-[#888] capitalize">{r.type}</td>
+                        <td className="px-4 py-3 text-xs text-[#888]">{r.notes || '—'}</td>
+                        <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(r.date)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-3">
+                            <button onClick={() => startEditReview(r)}
+                              className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
+                              Edit
+                            </button>
+                            <button onClick={() => deleteReview(r.id)}
+                              className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer">
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </section>

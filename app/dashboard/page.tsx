@@ -77,7 +77,7 @@ export default function Dashboard() {
   const [clockAction, setClockAction] = useState(false)
   const [clockError, setClockError] = useState('')
   const [allClockLogs, setAllClockLogs] = useState<ClockLog[]>([])
-  const [nextReview, setNextReview] = useState<{ date: string; type: string; notes?: string | null } | null>(null)
+  const [reviews2026, setReviews2026] = useState<{ date: string; type: string; notes?: string | null }[]>([])
   const router = useRouter()
 
   async function loadClockData(uid: string, adminFlag: boolean) {
@@ -113,13 +113,24 @@ export default function Dashboard() {
       .insert({ user_id: uid, date: today, clock_in_time: t }).select().limit(1)
     if (error) { setClockError(`Clock-in failed: ${error.message}`); setClockAction(false); return }
     if (t > '10:15') {
-      const minLate = minutesDiff('10:00', t)
-      const { data: existing } = await supabaseAdmin
-        .from('late_arrivals').select('id').eq('user_id', uid).eq('date', today).maybeSingle()
-      if (!existing) {
-        await supabaseAdmin.from('late_arrivals').insert(
-          { user_id: uid, date: today, arrival_time: t, minutes_late: minLate, pto_deduction_status: 'Pending', approved: false }
-        )
+      const dayOfWeek = new Date(today + 'T00:00:00').getDay() // 0=Sun
+      const isWorkingDay = dayOfWeek >= 1 && dayOfWeek <= 6 // Mon–Sat
+      if (isWorkingDay) {
+        const { data: todayHoliday } = await supabaseAdmin
+          .from('holidays').select('id').eq('date', today).maybeSingle()
+        if (!todayHoliday) {
+          const minLate = minutesDiff('10:00', t)
+          const { data: existing } = await supabaseAdmin
+            .from('late_arrivals').select('id').eq('user_id', uid).eq('date', today).maybeSingle()
+          if (!existing) {
+            await supabaseAdmin.from('late_arrivals').insert({
+              user_id: uid, date: today, arrival_time: t,
+              minutes_late: minLate,
+              reason: 'Auto-logged from clock-in',
+              pto_deduction_status: 'Pending', approved: false,
+            })
+          }
+        }
       }
     }
     await loadClockData(uid, adminFlag)
@@ -153,7 +164,7 @@ export default function Dashboard() {
       supabaseAdmin.from('holidays').select('id, name, date').gte('date', todayStr).order('date', { ascending: true }).limit(3),
       supabaseAdmin.from('working_saturdays').select('id, date').is('user_id', null).gte('date', todayStr).order('date', { ascending: true }),
       supabaseAdmin.from('working_saturdays').select('id, date').eq('user_id', uid).order('date', { ascending: false }).limit(10),
-      supabaseAdmin.from('reviews').select('date, type, notes').eq('user_id', uid).gte('date', todayStr).order('date', { ascending: true }).limit(1),
+      supabaseAdmin.from('reviews').select('date, type, notes').eq('user_id', uid).gte('date', '2026-01-01').lte('date', '2026-12-31').order('date', { ascending: true }),
     ])
 
     const typeLabelMap: Record<string, { label: string; sort: number }> = {}
@@ -200,7 +211,7 @@ export default function Dashboard() {
     })
     setHolidays(holidayRows ?? [])
     setWorkingSats({ company: wsRows ?? [], personal: myWsRows ?? [] })
-    setNextReview(reviewRows?.[0] ?? null)
+    setReviews2026(reviewRows ?? [])
   }
 
   useEffect(() => {
@@ -316,16 +327,23 @@ export default function Dashboard() {
           </button>
         </div>
 
-        {/* Next Review */}
-        {nextReview && (
-          <div className="mb-8 border border-[#ddd] bg-white px-8 py-4 flex items-center justify-between">
-            <div>
-              <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-1">Your Next Review</p>
-              <p className="text-sm font-light text-[#1a1a1a]">{fmt(nextReview.date)}</p>
+        {/* 2026 Reviews */}
+        {reviews2026.length > 0 && (
+          <div className="mb-8 border border-[#ddd] bg-white px-8 py-5">
+            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Your 2026 Reviews</p>
+            <div className="space-y-3">
+              {reviews2026.map((r, i) => (
+                <div key={i} className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-light text-[#1a1a1a]">{r.notes || (r.type === 'bi-annual' ? 'Mid-Year Review' : 'Annual Review')}</p>
+                    <p className="text-[10px] text-[#aaa] mt-0.5">{fmt(r.date)}</p>
+                  </div>
+                  <span className="text-[9px] tracking-[0.2em] uppercase text-[#888] border border-[#ddd] px-3 py-1 shrink-0 ml-4">
+                    {daysUntil(r.date)}
+                  </span>
+                </div>
+              ))}
             </div>
-            <span className="text-[9px] tracking-[0.2em] uppercase text-[#888] border border-[#ddd] px-3 py-1">
-              {nextReview.notes || (nextReview.type === 'bi-annual' ? 'Mid-Year' : nextReview.type === 'annual' ? 'Annual' : nextReview.type)}
-            </span>
           </div>
         )}
 

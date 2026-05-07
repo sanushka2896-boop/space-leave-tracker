@@ -25,81 +25,112 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-/* ── Dark mode overrides ── */
+/* ── Light mode: enforce readable text everywhere ── */
+/* No overrides needed — #1a1a1a on white/off-white is always legible */
+
+/* ══════════════════════════════════════════════════
+   DARK MODE
+══════════════════════════════════════════════════ */
+
 html.dark body { background-color: #0f0f0f; color: #f0ede8; }
 
-/* Backgrounds */
+/* ── Page & surface backgrounds ── */
 html.dark .bg-\[\#F5F2EE\] { background-color: #0f0f0f; }
 html.dark .bg-white        { background-color: #1a1a1a; }
-html.dark .bg-\[\#fafafa\] { background-color: #222; }
+html.dark .bg-\[\#fafafa\] { background-color: #1f1f1f; }
 html.dark .bg-\[\#fafaf9\] { background-color: #1d1d1d; }
-html.dark .bg-\[\#f8f6f3\] { background-color: #222; }
+html.dark .bg-\[\#fafaf8\] { background-color: #1d1d1d; }
+html.dark .bg-\[\#f8f6f3\] { background-color: #252525; }
 html.dark .bg-\[\#f5f5f5\] { background-color: #1e1e1e; }
 
-/* Borders */
-html.dark .border-\[\#ddd\]    { border-color: #2a2a2a; }
-html.dark .border-\[\#eee\]    { border-color: #222; }
+/* ── Borders ── */
+html.dark .border-\[\#ddd\]    { border-color: #2e2e2e; }
+html.dark .border-\[\#eee\]    { border-color: #2a2a2a; }
+html.dark .border-\[\#f0f0f0\] { border-color: #2a2a2a; }
 html.dark .border-\[\#1a1a1a\] { border-color: #f0ede8; }
 
-/* Dividers */
-html.dark .divide-\[\#eee\]    > :not([hidden]) ~ :not([hidden]) { border-color: #222; }
-html.dark .divide-\[\#f5f5f5\] > :not([hidden]) ~ :not([hidden]) { border-color: #1e1e1e; }
+/* ── Dividers ── */
+html.dark .divide-\[\#eee\]    > :not([hidden]) ~ :not([hidden]) { border-color: #2a2a2a; }
+html.dark .divide-\[\#f5f5f5\] > :not([hidden]) ~ :not([hidden]) { border-color: #232323; }
+html.dark .divide-\[\#ddd\]    > :not([hidden]) ~ :not([hidden]) { border-color: #2e2e2e; }
 
-/* Text */
+/* ── Primary & secondary text ── */
 html.dark .text-\[\#1a1a1a\] { color: #f0ede8; }
-html.dark .text-\[\#888\]    { color: #aaa; }
-html.dark .text-\[\#aaa\]    { color: #aaa; }
-html.dark .text-\[\#bbb\]    { color: #888; }
-html.dark .text-\[\#ccc\]    { color: #666; }
+html.dark .text-\[\#888\]    { color: #aaaaaa; }
+html.dark .text-\[\#aaa\]    { color: #aaaaaa; }
+html.dark .text-\[\#bbb\]    { color: #888888; }
+html.dark .text-\[\#ccc\]    { color: #666666; }
 
-/* Hover + interactive */
-html.dark .hover\:bg-\[\#fafafa\]:hover  { background-color: #282828; }
-html.dark .hover\:bg-\[\#1a1a1a\]:hover  { background-color: #f0ede8; }
+/* ── Hover states ── */
+html.dark .hover\:bg-\[\#fafafa\]:hover   { background-color: #282828; }
+html.dark .hover\:bg-\[\#1a1a1a\]:hover   { background-color: #f0ede8; }
 html.dark .hover\:text-\[\#1a1a1a\]:hover { color: #f0ede8; }
 html.dark .hover\:text-\[\#F5F2EE\]:hover { color: #0f0f0f; }
 
-/* All form inputs/selects/textareas */
+/* ── All form inputs / selects / textareas ── */
 html.dark input:not([type='checkbox']):not([type='radio']):not([type='file']),
 html.dark select,
 html.dark textarea {
-  background-color: #2a2a2a;
+  background-color: #252525;
   border-color: #3a3a3a;
   color: #f0ede8;
 }
 html.dark input[type='date'],
 html.dark input[type='time'] { color-scheme: dark; }
 html.dark input::placeholder,
-html.dark textarea::placeholder { color: #444; }
+html.dark textarea::placeholder { color: #666666; }
 
-/* Status badge backgrounds */
-html.dark .bg-amber-50         { background-color: #2a1f00; }
-html.dark .bg-emerald-50       { background-color: #002a1a; }
-html.dark .bg-red-50           { background-color: #2a0000; }
-html.dark .bg-emerald-50\/40   { background-color: rgba(0, 42, 26, 0.4); }
+/* ── Nav / header ── */
+html.dark header { background-color: #1a1a1a; border-color: #2e2e2e; }
 
-/* Status badge borders */
+/* ── Nav link colours: active #f0ede8, inactive #888 ── */
+/* (handled by .text-[#1a1a1a] and .text-[#aaa] overrides above) */
+
+/* ── Table row alternating in dark mode ── */
+html.dark table tbody tr:nth-child(even) { background-color: #1f1f1f; }
+html.dark table tbody tr:hover           { background-color: #282828 !important; }
+
+/* ── Status badge backgrounds — per spec ── */
+html.dark .bg-amber-50        { background-color: #3d2e1a; }   /* PENDING / LATE */
+html.dark .bg-amber-100       { background-color: #3d2e1a; }
+html.dark .bg-emerald-50      { background-color: #1a3d2b; }   /* APPROVED */
+html.dark .bg-emerald-100     { background-color: #1a3d2b; }
+html.dark .bg-red-50          { background-color: #3d1a1a; }   /* FLAG / REJECTED */
+html.dark .bg-red-100         { background-color: #3d1a1a; }
+html.dark .bg-emerald-50\/40  { background-color: rgba(26, 61, 43, 0.4); }
+
+/* ── Status badge borders ── */
 html.dark .border-amber-200   { border-color: #6b4c00; }
 html.dark .border-emerald-200 { border-color: #005a30; }
 html.dark .border-red-200     { border-color: #5a0000; }
 
-/* Status text — brighten slightly for dark bg */
-html.dark .text-amber-600  { color: #ffb300; }
-html.dark .text-amber-700  { color: #ffb300; }
-html.dark .text-emerald-600 { color: #4ade80; }
-html.dark .text-red-400    { color: #f87171; }
-html.dark .text-red-500    { color: #f87171; }
+/* ── Status text — spec values ── */
+html.dark .text-amber-600  { color: #fb923c; }   /* PENDING */
+html.dark .text-amber-700  { color: #fb923c; }
+html.dark .text-emerald-600 { color: #4ade80; }  /* APPROVED */
+html.dark .text-emerald-700 { color: #4ade80; }
+html.dark .text-red-400    { color: #f87171; }   /* errors */
+html.dark .text-red-500    { color: #f87171; }   /* FLAG / REJECTED */
 html.dark .text-red-600    { color: #f87171; }
 
-/* Nav sticky header */
-html.dark header { background-color: #1a1a1a; border-color: #2a2a2a; }
+/* ── Blue (team leave on calendar) ── */
+html.dark .bg-blue-50   { background-color: #1a2a3d; }
+html.dark .text-blue-500 { color: #60a5fa; }
+html.dark .text-blue-600 { color: #60a5fa; }
 
-/* Misc borders */
-html.dark .border-\[\#f0f0f0\] { border-color: #2a2a2a; }
-html.dark .divide-\[\#ddd\] > :not([hidden]) ~ :not([hidden]) { border-color: #2a2a2a; }
+/* ── Purple (holiday type badge) ── */
+html.dark .bg-purple-50   { background-color: #2a1a3d; }
+html.dark .text-purple-600 { color: #c084fc; }
 
-/* Table/section faint bg */
-html.dark .bg-\[\#fafaf8\] { background-color: #1d1d1d; }
+/* ── Working Saturday custom colours ── */
+html.dark .bg-\[\#e8e0d5\]   { background-color: #2a2520; }
+html.dark .text-\[\#7a6e5f\] { color: #a09488; }
+html.dark .bg-\[\#f0ebe4\]   { background-color: #252220; }
+html.dark .text-\[\#9a8e82\] { color: #888070; }
 
-/* Badge contrast helpers */
-html.dark .bg-amber-50  { background-color: #2d1f00; }
-html.dark .bg-red-50    { background-color: #2d0000; }
+/* ── Calendar: today indicator (bg-[#1a1a1a] inverts → light, text needs to flip dark) ── */
+html.dark .rounded-full.bg-\[\#1a1a1a\] { color: #0f0f0f; }
+
+/* ── Calendar cell highlight backgrounds ── */
+html.dark .bg-amber-50\/60 { background-color: rgba(61, 46, 26, 0.6); }
+html.dark .bg-\[\#e8e0d5\]\/40 { background-color: rgba(42, 37, 32, 0.4); }
