@@ -89,7 +89,7 @@ export default function AdminPage() {
   const [rError, setRError] = useState('')
   const [rEditId, setREditId] = useState<string | null>(null)
 
-  const [aForm, setAForm] = useState({ user_id: '', type: 'casual', date_from: '', date_to: '', note: '' })
+  const [aForm, setAForm] = useState({ user_id: '', type: 'earned', date_from: '', date_to: '', note: '' })
   const [aSaving, setASaving] = useState(false)
   const [aError, setAError] = useState('')
 
@@ -202,11 +202,11 @@ export default function AdminPage() {
       return { user_id: qUserId, leave_type: lt, allocated: newAlloc, balance: Math.max(newBal, 0), year }
     }
 
-    const rows = [makeRow('casual', parseFloat(qCasual) || 0), makeRow('sick', parseFloat(qSick) || 0)]
+    const rows = [makeRow('earned', parseFloat(qCasual) || 0), makeRow('sick', parseFloat(qSick) || 0)]
     const wfhVal = parseFloat(qWfh) || 0
     if (wfhVal > 0) rows.push(makeRow('wfh', wfhVal))
 
-    await supabaseAdmin.from('leave_balances').delete().eq('user_id', qUserId).in('leave_type', ['casual', 'sick', 'wfh'])
+    await supabaseAdmin.from('leave_balances').delete().eq('user_id', qUserId).in('leave_type', ['earned', 'sick', 'wfh'])
     const { error } = await supabaseAdmin.from('leave_balances').insert(rows)
     if (error) { setQError(error.message); setQSaving(false); return }
     setQSuccess('Saved.')
@@ -344,7 +344,7 @@ export default function AdminPage() {
       year: new Date().getFullYear(),
     })
 
-    setAForm({ user_id: '', type: 'casual', date_from: '', date_to: '', note: '' })
+    setAForm({ user_id: '', type: 'earned', date_from: '', date_to: '', note: '' })
     await loadData()
     setASaving(false)
   }
@@ -611,7 +611,7 @@ export default function AdminPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[#eee]">
-                  {['Name', 'Role', 'Location', 'Casual', 'Sick', 'WFH', ''].map(h => (
+                  {['Name', 'Role', 'Location', 'Earned', 'Sick', 'WFH', ''].map(h => (
                     <th key={h} className="px-6 py-3 text-left text-xs tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
                   ))}
                 </tr>
@@ -670,7 +670,7 @@ export default function AdminPage() {
                       </td>
                       <td className="px-6 py-4 text-xs text-[#888]">{m.role || '—'}</td>
                       <td className="px-6 py-4 text-xs text-[#888]">{m.location || '—'}</td>
-                      <td className="px-6 py-4 text-xs font-light">{getBalance('casual')}</td>
+                      <td className="px-6 py-4 text-xs font-light">{getBalance('earned')}</td>
                       <td className="px-6 py-4 text-xs font-light">{getBalance('sick')}</td>
                       <td className="px-6 py-4 text-xs font-light">{getBalance('wfh')}</td>
                       <td className="px-6 py-4">
@@ -704,7 +704,7 @@ export default function AdminPage() {
                   if (uid) {
                     const m = team.find(x => x.id === uid)
                     const wfh = getWfhAllocation(m?.role)
-                    setQCasual(String(m?.balances.find(b => b.leave_type === 'casual')?.allocated ?? 20))
+                    setQCasual(String(m?.balances.find(b => b.leave_type === 'earned')?.allocated ?? 20))
                     setQSick(String(m?.balances.find(b => b.leave_type === 'sick')?.allocated ?? 7))
                     setQWfh(String(m?.balances.find(b => b.leave_type === 'wfh')?.allocated ?? wfh))
                   }
@@ -720,7 +720,7 @@ export default function AdminPage() {
               const member = team.find(m => m.id === qUserId)
               const isJunior = member?.role?.toLowerCase().includes('junior') ?? false
               const rows: { key: string; label: string; val: string; set: (v: string) => void; disabled?: boolean }[] = [
-                { key: 'casual', label: 'Casual Leave', val: qCasual, set: setQCasual },
+                { key: 'earned', label: 'Earned Leave', val: qCasual, set: setQCasual },
                 { key: 'sick', label: 'Sick Leave', val: qSick, set: setQSick },
                 { key: 'wfh', label: 'WFH Days', val: qWfh, set: setQWfh, disabled: isJunior },
               ]
@@ -799,7 +799,7 @@ export default function AdminPage() {
                 onChange={e => setAForm({ ...aForm, type: e.target.value })}
                 className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none"
               >
-                <option value="casual">Casual Leave</option>
+                <option value="earned">Earned Leave</option>
                 <option value="sick">Sick Leave</option>
                 <option value="wfh">WFH</option>
                 <option value="maternity">Maternity Leave</option>
@@ -857,7 +857,7 @@ export default function AdminPage() {
         <section>
           <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-4">Leave Types</h3>
           <p className="text-xs text-[#888] leading-relaxed tracking-wider">
-            Casual Leave: 20 days &nbsp;·&nbsp; Sick Leave: 7 days &nbsp;·&nbsp; WFH: 0 (Junior) / 12 (Mid) / 20 (Senior+)
+            Earned Leave: 20 days &nbsp;·&nbsp; Sick Leave: 7 days &nbsp;·&nbsp; WFH: 0 (Junior) / 12 (Mid) / 20 (Senior+)
             <br />
             Maternity: 8 weeks &nbsp;·&nbsp; Miscarriage: 6 weeks &nbsp;·&nbsp; Sabbatical: custom — assign manually via quota editor
           </p>

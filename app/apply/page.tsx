@@ -58,7 +58,7 @@ export default function ApplyLeave() {
       }) as LeaveTypeDef[]
 
       setLeaveTypes(filtered)
-      setForm(f => ({ ...f, type: filtered[0]?.key ?? 'casual' }))
+      setForm(f => ({ ...f, type: filtered[0]?.key ?? 'earned' }))
 
       const balMap: Record<string, number> = {}
       for (const r of balRows ?? []) balMap[(r as any).leave_type] = (r as any).balance

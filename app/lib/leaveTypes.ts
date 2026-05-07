@@ -22,7 +22,7 @@ export function isWfhEligible(role: string | null | undefined): boolean {
 
 /**
  * Build the initial leave_balances rows for a brand-new user.
- * Auto-seeds: casual + sick (from default_days) + WFH (from role).
+ * Auto-seeds: earned + sick (from default_days) + WFH (from role).
  * Maternity / miscarriage / sabbatical are NOT seeded — admin assigns those as needed.
  */
 export function buildInitialBalances(
@@ -34,7 +34,7 @@ export function buildInitialBalances(
 
   for (const lt of leaveTypes) {
     if (!lt.is_active || lt.default_days === null) continue
-    if (!['casual', 'sick'].includes(lt.key)) continue
+    if (!['earned', 'sick'].includes(lt.key)) continue
     rows.push({ user_id: userId, leave_type: lt.key, allocated: lt.default_days, balance: lt.default_days })
   }
 

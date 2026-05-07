@@ -42,7 +42,7 @@ function getISTDate(): string {
 }
 function calcOvertimeDuration(logout: string): string | null {
   const [h, m] = logout.split(':').map(Number)
-  const mins = Math.max(0, h * 60 + m - 18 * 60)
+  const mins = Math.max(0, h * 60 + m - 19 * 60)
   if (mins <= 0) return null
   const hr = Math.floor(mins / 60), mn = mins % 60
   if (hr === 0) return `${mn} min${mn !== 1 ? 's' : ''}`
