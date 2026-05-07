@@ -154,18 +154,27 @@ export default function Dashboard() {
     const leaves = allMyLeaves ?? []
     const pastApproved = leaves.filter((l: any) => l.status === 'approved' && l.date_to < todayStr)
     const futureApproved = leaves.filter((l: any) => l.status === 'approved' && l.date_from >= todayStr)
-    const sumByType = (arr: any[], type: string) => arr.filter(l => l.type === type).reduce((s: number, l: any) => s + l.value, 0)
+    const sumByType = (arr: any[], ...types: string[]) => arr.filter(l => types.includes(l.type)).reduce((s: number, l: any) => s + l.value, 0)
 
-    const balanceItems: BalanceItem[] = (balRows ?? [])
-      .filter((r: any) => r.allocated > 0 || Math.abs(r.balance) > 0)
-      .sort((a: any, b: any) => (typeLabelMap[a.leave_type]?.sort ?? 99) - (typeLabelMap[b.leave_type]?.sort ?? 99))
-      .map((r: any) => ({
+    // Normalize casual→earned and deduplicate rows (keep highest allocated)
+    const normalized: Record<string, { leave_type: string; allocated: number; balance: number }> = {}
+    for (const r of balRows ?? []) {
+      const key = r.leave_type === 'casual' ? 'earned' : r.leave_type
+      if (!normalized[key] || r.allocated > normalized[key].allocated) {
+        normalized[key] = { leave_type: key, allocated: r.allocated, balance: r.balance }
+      }
+    }
+
+    const balanceItems: BalanceItem[] = Object.values(normalized)
+      .filter((r) => r.allocated > 0 || Math.abs(r.balance) > 0)
+      .sort((a, b) => (typeLabelMap[a.leave_type]?.sort ?? 99) - (typeLabelMap[b.leave_type]?.sort ?? 99))
+      .map((r) => ({
         key: r.leave_type,
         label: typeLabelMap[r.leave_type]?.label ?? r.leave_type,
         allocated: r.allocated,
         balance: r.balance,
-        taken: sumByType(pastApproved, r.leave_type),
-        scheduled: sumByType(futureApproved, r.leave_type),
+        taken: r.leave_type === 'earned' ? sumByType(pastApproved, 'earned', 'casual') : sumByType(pastApproved, r.leave_type),
+        scheduled: r.leave_type === 'earned' ? sumByType(futureApproved, 'earned', 'casual') : sumByType(futureApproved, r.leave_type),
       }))
 
     setBalances(balanceItems)

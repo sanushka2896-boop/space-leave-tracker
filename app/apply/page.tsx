@@ -7,6 +7,15 @@ import Nav from '../components/Nav'
 import type { LeaveTypeDef } from '../lib/leaveTypes'
 import { isWfhEligible } from '../lib/leaveTypes'
 
+const FALLBACK_LEAVE_TYPES: LeaveTypeDef[] = [
+  { key: 'earned',      label: 'Earned Leave',     default_days: 20,   requires_docs: false, is_active: true, sort_order: 1 },
+  { key: 'sick',        label: 'Sick Leave',        default_days: 7,    requires_docs: false, is_active: true, sort_order: 2 },
+  { key: 'wfh',         label: 'WFH',               default_days: null, requires_docs: false, is_active: true, sort_order: 3 },
+  { key: 'maternity',   label: 'Maternity Leave',   default_days: 56,   requires_docs: true,  is_active: true, sort_order: 4 },
+  { key: 'miscarriage', label: 'Miscarriage Leave', default_days: 42,   requires_docs: true,  is_active: true, sort_order: 5 },
+  { key: 'sabbatical',  label: 'Sabbatical',        default_days: null, requires_docs: false, is_active: true, sort_order: 6 },
+]
+
 function calcWorkingDays(from: string, to: string): number {
   const start = new Date(from + 'T00:00:00')
   const end = new Date(to + 'T00:00:00')
@@ -52,7 +61,8 @@ export default function ApplyLeave() {
         supabaseAdmin.from('leave_balances').select('leave_type, balance').eq('user_id', dbUser.id),
       ])
 
-      const filtered = (types ?? []).filter((t: LeaveTypeDef) => {
+      const source = (types && types.length > 0) ? types : FALLBACK_LEAVE_TYPES
+      const filtered = source.filter((t: LeaveTypeDef) => {
         if (t.key === 'wfh') return isWfhEligible(dbUser.role)
         return true
       }) as LeaveTypeDef[]

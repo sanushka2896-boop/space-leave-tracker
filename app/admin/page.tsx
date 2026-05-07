@@ -125,6 +125,11 @@ export default function AdminPage() {
   const [csvErr, setCsvErr] = useState('')
   const [csvSuccess, setCsvSuccess] = useState('')
 
+  // Holiday Manager extras
+  const [hYear, setHYear] = useState(new Date().getFullYear())
+  const [nhPreview, setNhPreview] = useState<{ date: string; name: string; selected: boolean }[]>([])
+  const [nhSaving, setNhSaving] = useState(false)
+
   const router = useRouter()
 
   async function loadOvertimeEntries() {
@@ -496,6 +501,62 @@ export default function AdminPage() {
     setCsvSuccess(`Updated ${updated} employee${updated !== 1 ? 's' : ''}.`)
   }
 
+  function getNationalHolidays(year: number): { date: string; name: string }[] {
+    const y = year
+    return [
+      { date: `${y}-01-26`, name: 'Republic Day' },
+      { date: `${y}-03-17`, name: 'Holi' },
+      { date: `${y}-04-14`, name: 'Dr. Ambedkar Jayanti' },
+      { date: `${y}-04-18`, name: 'Good Friday' },
+      { date: `${y}-05-01`, name: 'Maharashtra Day' },
+      { date: `${y}-08-15`, name: 'Independence Day' },
+      { date: `${y}-10-02`, name: 'Gandhi Jayanti' },
+      { date: `${y}-10-24`, name: 'Dussehra' },
+      { date: `${y}-11-01`, name: 'Diwali (Laxmi Puja)' },
+      { date: `${y}-11-02`, name: 'Diwali (Bhai Dooj)' },
+      { date: `${y}-12-25`, name: 'Christmas' },
+    ]
+  }
+
+  async function handleHolidayCsvImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setHError('')
+    const text = await file.text()
+    const lines = text.trim().split('\n').filter(l => l.trim())
+    if (lines.length < 2) { setHError('CSV empty or missing data rows.'); e.target.value = ''; return }
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''))
+    const dateIdx = headers.indexOf('date')
+    const nameIdx = headers.indexOf('name')
+    if (dateIdx === -1 || nameIdx === -1) { setHError('CSV must have "date" and "name" columns.'); e.target.value = ''; return }
+    setHSaving(true)
+    let added = 0
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''))
+      const date = cols[dateIdx]
+      const name = cols[nameIdx]
+      if (!date || !name) continue
+      await supabaseAdmin.from('holidays').upsert({ date, name, type: 'national' }, { onConflict: 'date' })
+      added++
+    }
+    e.target.value = ''
+    await loadData()
+    setHSaving(false)
+    if (added === 0) setHError('No valid rows found.')
+  }
+
+  async function saveNationalHolidays() {
+    const toSave = nhPreview.filter(h => h.selected)
+    if (toSave.length === 0) return
+    setNhSaving(true)
+    for (const h of toSave) {
+      await supabaseAdmin.from('holidays').upsert({ date: h.date, name: h.name, type: 'national' }, { onConflict: 'date' })
+    }
+    await loadData()
+    setNhPreview([])
+    setNhSaving(false)
+  }
+
   if (loading) return null
 
   return (
@@ -752,11 +813,13 @@ export default function AdminPage() {
           </div>
         </section>
 
-        {/* Leave Quota Assignment */}
+        {/* Leave Quota Assignment + Assign Leave */}
         <section>
+          <div className="grid grid-cols-2 gap-8 items-start">
+          <div>
           <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Leave Quota Assignment</h3>
           <p className="text-xs text-[#bbb] tracking-wider mb-6">Set annual allocation per employee. Remaining adjusts proportionally to any change in allocated.</p>
-          <div className="border border-[#ddd] bg-white p-6 max-w-xl space-y-5">
+          <div className="border border-[#ddd] bg-white p-6 space-y-5">
             <div>
               <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Employee</label>
               <select
@@ -839,12 +902,12 @@ export default function AdminPage() {
               {qSaving ? 'Saving…' : 'Save Quotas'}
             </button>
           </div>
-        </section>
+          </div>
 
-        {/* Assign Leave */}
-        <section>
+          {/* Assign Leave */}
+          <div>
           <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">Assign Leave</h3>
-          <div className="border border-[#ddd] bg-white p-6 max-w-xl space-y-4">
+          <div className="border border-[#ddd] bg-white p-6 space-y-4">
             <p className="text-xs text-[#bbb] tracking-wider">Saved as approved immediately. Balance deducted. Appears on employee dashboard and calendar.</p>
             <div>
               <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Employee</label>
@@ -916,21 +979,78 @@ export default function AdminPage() {
               {aSaving ? 'Assigning…' : 'Assign Leave'}
             </button>
           </div>
-        </section>
-
-        {/* Leave Types */}
-        <section>
-          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-4">Leave Types</h3>
-          <p className="text-xs text-[#888] leading-relaxed tracking-wider">
-            Earned Leave: 20 days &nbsp;·&nbsp; Sick Leave: 7 days &nbsp;·&nbsp; WFH: 0 (Junior) / 12 (Mid) / 20 (Senior+)
-            <br />
-            Maternity: 8 weeks &nbsp;·&nbsp; Miscarriage: 6 weeks &nbsp;·&nbsp; Sabbatical: custom — assign manually via quota editor
-          </p>
+          </div>
+          </div>
         </section>
 
         {/* Holiday Manager */}
         <section>
           <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">Holiday Manager</h3>
+
+          {/* Toolbar: year selector, CSV upload, national holidays */}
+          <div className="flex flex-wrap items-center gap-4 mb-6">
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] tracking-[0.2em] uppercase text-[#888]">Year</label>
+              <select
+                value={hYear}
+                onChange={e => { setHYear(Number(e.target.value)); setNhPreview([]) }}
+                className="border border-[#ddd] bg-[#F5F2EE] px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none"
+              >
+                {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+            <label className="cursor-pointer border border-[#ddd] bg-white px-4 py-1.5 text-[10px] tracking-[0.2em] uppercase text-[#888] hover:border-[#aaa] transition-colors">
+              {hSaving ? 'Uploading…' : 'CSV Upload'}
+              <input type="file" accept=".csv" className="hidden" onChange={handleHolidayCsvImport} disabled={hSaving} />
+            </label>
+            <button
+              onClick={() => {
+                const list = getNationalHolidays(hYear)
+                setNhPreview(list.map(h => ({ ...h, selected: true })))
+              }}
+              className="border border-[#ddd] bg-white px-4 py-1.5 text-[10px] tracking-[0.2em] uppercase text-[#888] hover:border-[#aaa] transition-colors cursor-pointer"
+            >
+              Load National Holidays
+            </button>
+            {hError && <p className="text-xs text-red-400">{hError}</p>}
+          </div>
+
+          {/* National holidays preview */}
+          {nhPreview.length > 0 && (
+            <div className="border border-[#ddd] bg-white p-6 mb-6 space-y-3">
+              <p className="text-[10px] tracking-[0.2em] uppercase text-[#888] mb-3">Select holidays to import for {hYear}</p>
+              <div className="grid grid-cols-2 gap-2">
+                {nhPreview.map((h, i) => (
+                  <label key={h.date} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={h.selected}
+                      onChange={e => setNhPreview(prev => prev.map((x, j) => j === i ? { ...x, selected: e.target.checked } : x))}
+                      className="accent-[#1a1a1a]"
+                    />
+                    <span className="text-xs text-[#1a1a1a]">{h.name}</span>
+                    <span className="text-[10px] text-[#aaa]">{h.date}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={saveNationalHolidays}
+                  disabled={nhSaving || nhPreview.every(h => !h.selected)}
+                  className="px-6 py-2 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
+                >
+                  {nhSaving ? 'Saving…' : `Confirm — Add ${nhPreview.filter(h => h.selected).length} Holidays`}
+                </button>
+                <button
+                  onClick={() => setNhPreview([])}
+                  className="px-4 py-2 text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-8">
             <div className="border border-[#ddd] bg-white p-6 space-y-4">
               <p className="text-xs tracking-[0.2em] uppercase text-[#888]">Add Holiday</p>
