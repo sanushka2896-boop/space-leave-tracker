@@ -26,6 +26,7 @@ type TeamMember = {
   location: string
   is_bd_associate: boolean
   is_admin: boolean
+  date_of_joining?: string | null
   balances: { leave_type: string; allocated: number; balance: number }[]
 }
 
@@ -116,6 +117,14 @@ export default function AdminPage() {
   const [teamEditSaving, setTeamEditSaving] = useState(false)
   const [deletingOTAdminId, setDeletingOTAdminId] = useState<string | null>(null)
 
+  // Employee Records
+  const [editingJoiningId, setEditingJoiningId] = useState<string | null>(null)
+  const [joiningEditDate, setJoiningEditDate] = useState('')
+  const [joiningEditSaving, setJoiningEditSaving] = useState(false)
+  const [csvImporting, setCsvImporting] = useState(false)
+  const [csvErr, setCsvErr] = useState('')
+  const [csvSuccess, setCsvSuccess] = useState('')
+
   const router = useRouter()
 
   async function loadOvertimeEntries() {
@@ -136,7 +145,7 @@ export default function AdminPage() {
       { data: ltData },
     ] = await Promise.all([
       supabaseAdmin.from('leaves').select('*').eq('status', 'pending').order('created_at', { ascending: false }),
-      supabaseAdmin.from('users').select('id, name, email, role, location, is_bd_associate, is_admin'),
+      supabaseAdmin.from('users').select('id, name, email, role, location, is_bd_associate, is_admin, date_of_joining'),
       supabaseAdmin.from('holidays').select('*').order('date', { ascending: true }),
       supabaseAdmin.from('reviews').select('id, user_id, date, type, notes, created_at').order('date', { ascending: true }),
       supabaseAdmin.from('working_saturdays').select('*').is('user_id', null).order('date', { ascending: true }),
@@ -429,6 +438,62 @@ export default function AdminPage() {
     await supabaseAdmin.from('overtime_entries').delete().eq('id', id)
     setDeletingOTAdminId(null)
     await loadOvertimeEntries()
+  }
+
+  function calcTenure(joining: string | null | undefined): string {
+    if (!joining) return '—'
+    const j = new Date(joining + 'T00:00:00')
+    const now = new Date()
+    const totalMonths = (now.getFullYear() - j.getFullYear()) * 12 + (now.getMonth() - j.getMonth())
+    if (totalMonths < 0) return '—'
+    const years = Math.floor(totalMonths / 12)
+    const months = totalMonths % 12
+    if (years === 0 && months === 0) return '< 1 month'
+    if (years === 0) return `${months}m`
+    if (months === 0) return `${years}y`
+    return `${years}y ${months}m`
+  }
+
+  async function saveJoiningDate(id: string) {
+    setJoiningEditSaving(true)
+    await supabaseAdmin.from('users').update({ date_of_joining: joiningEditDate || null }).eq('id', id)
+    setEditingJoiningId(null)
+    await loadData()
+    setJoiningEditSaving(false)
+  }
+
+  async function handleCSVImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvErr('')
+    setCsvSuccess('')
+    const text = await file.text()
+    const lines = text.trim().split('\n').filter(l => l.trim())
+    if (lines.length < 2) { setCsvErr('CSV is empty or has no data rows.'); e.target.value = ''; return }
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''))
+    const nameIdx = headers.indexOf('name')
+    const dateIdx = headers.indexOf('date_of_joining')
+    if (nameIdx === -1 || dateIdx === -1) {
+      setCsvErr('CSV must have "name" and "date_of_joining" columns.')
+      e.target.value = ''
+      return
+    }
+    setCsvImporting(true)
+    let updated = 0
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''))
+      const name = cols[nameIdx]
+      const date = cols[dateIdx]
+      if (!name || !date) continue
+      const member = team.find(m => m.name?.toLowerCase() === name.toLowerCase())
+      if (!member) continue
+      await supabaseAdmin.from('users').update({ date_of_joining: date }).eq('id', member.id)
+      updated++
+    }
+    e.target.value = ''
+    await loadData()
+    setCsvImporting(false)
+    setCsvSuccess(`Updated ${updated} employee${updated !== 1 ? 's' : ''}.`)
   }
 
   if (loading) return null
@@ -960,6 +1025,78 @@ export default function AdminPage() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        {/* Employee Records */}
+        <section>
+          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Employee Records</h3>
+          <p className="text-xs text-[#bbb] tracking-wider mb-6">Date of joining and tenure. Import via CSV or edit inline.</p>
+
+          <div className="flex items-center gap-4 mb-6 flex-wrap">
+            <label className={`px-5 py-2 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer ${csvImporting ? 'opacity-40 pointer-events-none' : ''}`}>
+              {csvImporting ? 'Importing…' : 'Import CSV'}
+              <input type="file" accept=".csv" className="hidden" onChange={handleCSVImport} disabled={csvImporting} />
+            </label>
+            <span className="text-[10px] text-[#aaa] tracking-wider">Columns: name, date_of_joining (YYYY-MM-DD)</span>
+            {csvErr && <p className="text-xs text-red-400">{csvErr}</p>}
+            {csvSuccess && <p className="text-xs text-emerald-600">{csvSuccess}</p>}
+          </div>
+
+          <div className="border border-[#ddd] bg-white overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-[#eee]">
+                  {['Name', 'Role', 'Date of Joining', 'Time at Company', ''].map(h => (
+                    <th key={h} className="px-6 py-3 text-left text-xs tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f5f5f5]">
+                {team.map(m => (
+                  editingJoiningId === m.id ? (
+                    <tr key={m.id} className="bg-[#fafafa]">
+                      <td className="px-6 py-4 text-xs text-[#1a1a1a]">{m.name || m.email}</td>
+                      <td className="px-6 py-4 text-xs text-[#888]">{m.role || '—'}</td>
+                      <td className="px-6 py-4" colSpan={2}>
+                        <input
+                          type="date"
+                          value={joiningEditDate}
+                          onChange={e => setJoiningEditDate(e.target.value)}
+                          className="border border-[#ddd] bg-white px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none"
+                        />
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex gap-3">
+                          <button onClick={() => saveJoiningDate(m.id)} disabled={joiningEditSaving}
+                            className="text-xs text-[#1a1a1a] hover:text-emerald-600 cursor-pointer disabled:opacity-40">
+                            {joiningEditSaving ? '…' : 'Save'}
+                          </button>
+                          <button onClick={() => setEditingJoiningId(null)}
+                            className="text-xs text-[#aaa] hover:text-[#1a1a1a] cursor-pointer">
+                            Cancel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={m.id} className="hover:bg-[#fafafa]">
+                      <td className="px-6 py-4 text-xs text-[#1a1a1a]">{m.name || m.email}</td>
+                      <td className="px-6 py-4 text-xs text-[#888]">{m.role || '—'}</td>
+                      <td className="px-6 py-4 text-xs text-[#888]">{m.date_of_joining ? formatDate(m.date_of_joining) : '—'}</td>
+                      <td className="px-6 py-4 text-xs text-[#888]">{calcTenure(m.date_of_joining)}</td>
+                      <td className="px-6 py-4">
+                        <button
+                          onClick={() => { setEditingJoiningId(m.id); setJoiningEditDate(m.date_of_joining ?? '') }}
+                          className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                ))}
+              </tbody>
+            </table>
           </div>
         </section>
 

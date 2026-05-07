@@ -49,6 +49,25 @@ function calcOvertimeDuration(logout: string): string | null {
   if (mn === 0) return `${hr} hr${hr !== 1 ? 's' : ''}`
   return `${hr} hr ${mn} min${mn !== 1 ? 's' : ''}`
 }
+function calcOvertimeFromExtraHours(start: string, end: string): string | null {
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  const startMins = sh * 60 + sm
+  const endMins = eh * 60 + em
+  const threshold = 19 * 60
+  if (endMins <= threshold) return null
+  const otStart = Math.max(startMins, threshold)
+  const mins = endMins - otStart
+  if (mins <= 0) return null
+  const hr = Math.floor(mins / 60), mn = mins % 60
+  if (hr === 0) return `${mn} min${mn !== 1 ? 's' : ''}`
+  if (mn === 0) return `${hr} hr${hr !== 1 ? 's' : ''}`
+  return `${hr} hr ${mn} min${mn !== 1 ? 's' : ''}`
+}
+function calcOT(logout: string, extraStart: string, extraEnd: string): string | null {
+  if (extraStart && extraEnd) return calcOvertimeFromExtraHours(extraStart, extraEnd)
+  return calcOvertimeDuration(logout)
+}
 function minsLateFrom10(t: string): number {
   const [h, m] = t.split(':').map(Number)
   return Math.max(0, h * 60 + m - 10 * 60)
@@ -216,7 +235,7 @@ export default function AttendancePage() {
     setOtSaving(true)
     const { error } = await supabaseAdmin.from('overtime_entries').insert({
       user_id: userId, date: otForm.date, login_time: otForm.login_time,
-      logout_time: otForm.logout_time, overtime_duration: calcOvertimeDuration(otForm.logout_time),
+      logout_time: otForm.logout_time, overtime_duration: calcOT(otForm.logout_time, otForm.extra_hours_start, otForm.extra_hours_end),
       extra_hours_start: otForm.extra_hours_start || null, extra_hours_end: otForm.extra_hours_end || null,
       reason: otForm.reason || null, compensated_by: otForm.compensated_by || null, approved: false,
     })
@@ -236,7 +255,7 @@ export default function AttendancePage() {
     setEditOTSaving(true)
     const { error } = await supabaseAdmin.from('overtime_entries').update({
       date: editingOT.date, login_time: editingOT.login_time, logout_time: editingOT.logout_time,
-      overtime_duration: calcOvertimeDuration(editingOT.logout_time),
+      overtime_duration: calcOT(editingOT.logout_time, editingOT.extra_hours_start ?? '', editingOT.extra_hours_end ?? ''),
       extra_hours_start: editingOT.extra_hours_start || null, extra_hours_end: editingOT.extra_hours_end || null,
       reason: editingOT.reason || null, compensated_by: editingOT.compensated_by || null,
     }).eq('id', editingOT.id)
@@ -271,8 +290,12 @@ export default function AttendancePage() {
     return groups
   }
 
-  const previewOT = otForm.logout_time ? calcOvertimeDuration(otForm.logout_time) : null
-  const previewEditOT = editingOT?.logout_time ? calcOvertimeDuration(editingOT.logout_time) : null
+  const previewOT = otForm.logout_time
+    ? calcOT(otForm.logout_time, otForm.extra_hours_start, otForm.extra_hours_end)
+    : null
+  const previewEditOT = editingOT?.logout_time
+    ? calcOT(editingOT.logout_time, editingOT.extra_hours_start ?? '', editingOT.extra_hours_end ?? '')
+    : null
 
   if (loading) return null
 
@@ -316,6 +339,7 @@ export default function AttendancePage() {
                     <Th label="Day" />
                     {isAdmin && <Th label="Name" />}
                     <Th label="Clock In Time" />
+                    <Th label="Status" />
                     {!isAdmin && <th className="px-4 py-3 w-16" />}
                   </tr>
                 </thead>
@@ -327,6 +351,13 @@ export default function AttendancePage() {
                       {isAdmin && <td className="px-4 py-3 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>}
                       <td className={`px-4 py-3 text-xs ${log.clock_in_time && log.clock_in_time > '10:15' ? 'text-amber-600' : 'text-[#888]'}`}>
                         {fmtTime(log.clock_in_time)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {log.clock_in_time && log.clock_in_time > '10:15' ? (
+                          <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 bg-amber-50 text-amber-600 border border-amber-200">Late</span>
+                        ) : log.clock_in_time ? (
+                          <span className="text-[9px] uppercase tracking-wider text-emerald-600">On time</span>
+                        ) : null}
                       </td>
                       {!isAdmin && (
                         <td className="px-4 py-3">
