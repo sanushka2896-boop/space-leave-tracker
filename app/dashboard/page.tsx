@@ -77,7 +77,7 @@ export default function Dashboard() {
   const [clockAction, setClockAction] = useState(false)
   const [clockError, setClockError] = useState('')
   const [allClockLogs, setAllClockLogs] = useState<ClockLog[]>([])
-  const [nextReview, setNextReview] = useState<{ date: string; type: string } | null>(null)
+  const [nextReview, setNextReview] = useState<{ date: string; type: string; notes?: string | null } | null>(null)
   const router = useRouter()
 
   async function loadClockData(uid: string, adminFlag: boolean) {
@@ -85,11 +85,9 @@ export default function Dashboard() {
     const { data: myLogArr } = await supabaseAdmin
       .from('clock_logs').select('*').eq('user_id', uid).eq('date', today).limit(1)
     setTodayClock(myLogArr?.[0] ?? null)
-    if (adminFlag) {
-      const { data: allLogs } = await supabaseAdmin
-        .from('clock_logs').select('*, users(name)').eq('date', today).order('clock_in_time', { ascending: true })
-      setAllClockLogs(allLogs ?? [])
-    }
+    const { data: allLogs } = await supabaseAdmin
+      .from('clock_logs').select('*, users(name)').eq('date', today).order('clock_in_time', { ascending: true })
+    setAllClockLogs(allLogs ?? [])
   }
 
   async function deleteClockIn(uid: string, adminFlag: boolean) {
@@ -98,6 +96,13 @@ export default function Dashboard() {
     const { error } = await supabaseAdmin.from('clock_logs').delete().eq('id', todayClock.id)
     if (error) { setClockError(`Delete failed: ${error.message}`); setClockAction(false); return }
     await loadClockData(uid, adminFlag)
+    setClockAction(false)
+  }
+
+  async function deleteAnyClockIn(id: string) {
+    setClockAction(true)
+    await supabaseAdmin.from('clock_logs').delete().eq('id', id)
+    await loadClockData(userId, isAdmin)
     setClockAction(false)
   }
 
@@ -148,7 +153,7 @@ export default function Dashboard() {
       supabaseAdmin.from('holidays').select('id, name, date').gte('date', todayStr).order('date', { ascending: true }).limit(3),
       supabaseAdmin.from('working_saturdays').select('id, date').is('user_id', null).gte('date', todayStr).order('date', { ascending: true }),
       supabaseAdmin.from('working_saturdays').select('id, date').eq('user_id', uid).order('date', { ascending: false }).limit(10),
-      supabaseAdmin.from('reviews').select('date, type').eq('user_id', uid).gte('date', todayStr).order('date', { ascending: true }).limit(1),
+      supabaseAdmin.from('reviews').select('date, type, notes').eq('user_id', uid).gte('date', todayStr).order('date', { ascending: true }).limit(1),
     ])
 
     const typeLabelMap: Record<string, { label: string; sort: number }> = {}
@@ -319,7 +324,7 @@ export default function Dashboard() {
               <p className="text-sm font-light text-[#1a1a1a]">{fmt(nextReview.date)}</p>
             </div>
             <span className="text-[9px] tracking-[0.2em] uppercase text-[#888] border border-[#ddd] px-3 py-1">
-              {nextReview.type === 'bi-annual' ? 'Mid-Year' : nextReview.type === 'annual' ? 'Annual' : nextReview.type}
+              {nextReview.notes || (nextReview.type === 'bi-annual' ? 'Mid-Year' : nextReview.type === 'annual' ? 'Annual' : nextReview.type)}
             </span>
           </div>
         )}
@@ -362,12 +367,12 @@ export default function Dashboard() {
             )}
           </div>
 
-          {isAdmin && allClockLogs.length > 0 && (
+          {allClockLogs.length > 0 && (
             <div className="border border-[#ddd] border-t-0 bg-white overflow-hidden">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-[#eee]">
-                    {['Employee', 'Clock In', 'Status'].map(h => (
+                    {['Employee', 'Clock In', 'Status', ...(isAdmin ? [''] : [])].map(h => (
                       <th key={h} className="px-6 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
                     ))}
                   </tr>
@@ -388,6 +393,16 @@ export default function Dashboard() {
                             <span className="text-[9px] uppercase tracking-wider text-emerald-600">On time</span>
                           )}
                         </td>
+                        {isAdmin && (
+                          <td className="px-6 py-3">
+                            <button
+                              onClick={() => deleteAnyClockIn(log.id)}
+                              disabled={clockAction}
+                              className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-30">
+                              Delete
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     )
                   })}

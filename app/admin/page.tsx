@@ -487,33 +487,32 @@ export default function AdminPage() {
   }
 
   function computeFlags() {
+    const todayStr = new Date().toISOString().split('T')[0]
+    const todayYM = todayStr.slice(0, 7)
+    const todayDay = parseInt(todayStr.split('-')[2])
+
     const lateByMonth: Record<string, { name: string; mins: number }> = {}
     for (const row of allLateData) {
       const k = `${row.user_id}|${row.date.slice(0, 7)}`
       if (!lateByMonth[k]) lateByMonth[k] = { name: (row.users as any)?.name || '—', mins: 0 }
       lateByMonth[k].mins += row.minutes_late ?? 0
     }
-    const otByMonth: Record<string, { name: string; mins: number; hasSingle: boolean }> = {}
+    const otByMonth: Record<string, number> = {}
     for (const e of allOtData) {
       const k = `${e.user_id}|${e.date.slice(0, 7)}`
-      const mins = parseOTDurationLocal(e.overtime_duration)
-      if (!otByMonth[k]) otByMonth[k] = { name: (e.users as any)?.name || '—', mins: 0, hasSingle: false }
-      otByMonth[k].mins += mins
-      if (mins >= 480) otByMonth[k].hasSingle = true
+      otByMonth[k] = (otByMonth[k] ?? 0) + parseOTDurationLocal(e.overtime_duration)
     }
+
     const flags: { userId: string; name: string; month: string; flagType: string; amount: number; deductDays: number }[] = []
     for (const [k, d] of Object.entries(lateByMonth)) {
       const [userId, month] = k.split('|')
+      const canFlag = month < todayYM || (month === todayYM && todayDay >= 25)
+      if (!canFlag) continue
       const resolved = attendanceDeductions.some(x => x.user_id === userId && x.month === month && (x.flag_type === 'full_day' || x.flag_type === 'half_day'))
       if (resolved) continue
-      if (d.mins >= 480) flags.push({ userId, name: d.name, month, flagType: 'full_day', amount: d.mins, deductDays: 1 })
-      else if (d.mins >= 240) flags.push({ userId, name: d.name, month, flagType: 'half_day', amount: d.mins, deductDays: 0.5 })
-    }
-    for (const [k, d] of Object.entries(otByMonth)) {
-      const [userId, month] = k.split('|')
-      if (d.mins < 480 && !d.hasSingle) continue
-      if (attendanceDeductions.some(x => x.user_id === userId && x.month === month && x.flag_type === 'ot_flag')) continue
-      flags.push({ userId, name: d.name, month, flagType: 'ot_flag', amount: d.mins, deductDays: 0 })
+      const netLate = d.mins - (otByMonth[k] ?? 0)
+      if (netLate >= 480) flags.push({ userId, name: d.name, month, flagType: 'full_day', amount: netLate, deductDays: 1 })
+      else if (netLate >= 240) flags.push({ userId, name: d.name, month, flagType: 'half_day', amount: netLate, deductDays: 0.5 })
     }
     return flags
   }
@@ -523,9 +522,12 @@ export default function AdminPage() {
     if (flag.deductDays > 0) {
       const { data: bal } = await supabaseAdmin.from('leave_balances').select('balance, allocated')
         .eq('user_id', flag.userId).eq('leave_type', 'earned').maybeSingle()
-      await supabaseAdmin.from('leave_balances').upsert({
+      await supabaseAdmin.from('leave_balances').delete()
+        .eq('user_id', flag.userId).eq('leave_type', 'earned')
+      await supabaseAdmin.from('leave_balances').insert({
         user_id: flag.userId, leave_type: 'earned',
         allocated: bal?.allocated ?? 0, balance: (bal?.balance ?? 0) - flag.deductDays,
+        year: new Date().getFullYear(),
       })
       await supabaseAdmin.from('leaves').insert({
         user_id: flag.userId, type: 'earned',
@@ -540,23 +542,26 @@ export default function AdminPage() {
       leave_deducted: flag.deductDays,
       note: `Flag cleared by admin — ${flag.month}`,
     })
-    setFlagModal(null)
     await loadFlagData()
+    setFlagModal(null)
     setFlagDeducting(false)
   }
 
   async function autoInsertReviews(userId: string, doj: string) {
+    await supabaseAdmin.from('reviews').delete().eq('user_id', userId)
+    const ords = ['1st', '2nd', '3rd', '4th', '5th']
     const d = new Date(doj + 'T00:00:00')
-    const bi = new Date(d); bi.setMonth(bi.getMonth() + 6)
-    const ann = new Date(d); ann.setFullYear(ann.getFullYear() + 1)
-    const fmt = (dt: Date) => dt.toISOString().split('T')[0]
-    const { data: existing } = await supabaseAdmin.from('reviews').select('id').eq('user_id', userId)
-    if (!existing || existing.length === 0) {
-      await supabaseAdmin.from('reviews').insert([
-        { user_id: userId, date: fmt(bi), type: 'bi-annual', notes: 'Auto-scheduled from DOJ' },
-        { user_id: userId, date: fmt(ann), type: 'annual', notes: 'Auto-scheduled from DOJ' },
-      ])
+    const fmtDt = (dt: Date) => dt.toISOString().split('T')[0]
+    const rows: { user_id: string; date: string; type: string; notes: string }[] = []
+    for (let i = 1; i <= 5; i++) {
+      const dt = new Date(d); dt.setFullYear(dt.getFullYear() + i)
+      rows.push({ user_id: userId, date: fmtDt(dt), type: 'annual', notes: `${ords[i - 1]} Year Review` })
     }
+    for (let i = 0; i < 5; i++) {
+      const dt = new Date(d); dt.setMonth(dt.getMonth() + 6 + i * 12)
+      rows.push({ user_id: userId, date: fmtDt(dt), type: 'bi-annual', notes: `${ords[i]} Bi-Annual Review` })
+    }
+    await supabaseAdmin.from('reviews').insert(rows)
   }
 
   async function runRetroactiveReviews() {
@@ -564,12 +569,10 @@ export default function AdminPage() {
     let count = 0
     for (const m of team) {
       if (!m.date_of_joining) continue
-      const { data: existing } = await supabaseAdmin.from('reviews').select('id').eq('user_id', m.id)
-      if (existing && existing.length > 0) continue
       await autoInsertReviews(m.id, m.date_of_joining)
       count++
     }
-    setRetroResult(`Added reviews for ${count} employee${count !== 1 ? 's' : ''}`)
+    setRetroResult(`Regenerated reviews for ${count} employee${count !== 1 ? 's' : ''}`)
     setRetroRunning(false)
     await loadData()
   }
@@ -766,9 +769,9 @@ export default function AdminPage() {
           const flags = computeFlags()
           if (flags.length === 0) return null
           const flagLabel = (t: string) =>
-            t === 'full_day' ? 'Full Day Deduction' : t === 'half_day' ? 'Half Day Deduction' : 'OT Flag'
+            t === 'full_day' ? 'Full Day Deduction' : 'Half Day Deduction'
           const flagCls = (t: string) =>
-            t === 'ot_flag' ? 'text-amber-600 bg-amber-50 border-amber-200' : 'text-red-600 bg-red-50 border-red-200'
+            t === 'full_day' ? 'text-red-600 bg-red-50 border-red-200' : 'text-amber-600 bg-amber-50 border-amber-200'
           return (
             <section>
               <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">
@@ -790,7 +793,7 @@ export default function AdminPage() {
                         <td className="px-5 py-3">
                           <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${flagCls(f.flagType)}`}>{flagLabel(f.flagType)}</span>
                         </td>
-                        <td className="px-5 py-3 text-xs text-[#888]">{Math.round(f.amount)} mins</td>
+                        <td className="px-5 py-3 text-xs text-[#888]">{Math.round(f.amount)} mins net late</td>
                         <td className="px-5 py-3 text-xs text-[#888]">{f.month}</td>
                         <td className="px-5 py-3">
                           <button

@@ -47,9 +47,10 @@ html.dark .divide-\[\#f5f5f5\] > :not([hidden]) ~ :not([hidden]) { border-color:
 
 /* Text */
 html.dark .text-\[\#1a1a1a\] { color: #f0ede8; }
-html.dark .text-\[\#888\]    { color: #888; }
-html.dark .text-\[\#aaa\]    { color: #666; }
-html.dark .text-\[\#bbb\]    { color: #555; }
+html.dark .text-\[\#888\]    { color: #aaa; }
+html.dark .text-\[\#aaa\]    { color: #aaa; }
+html.dark .text-\[\#bbb\]    { color: #888; }
+html.dark .text-\[\#ccc\]    { color: #666; }
 
 /* Hover + interactive */
 html.dark .hover\:bg-\[\#fafafa\]:hover  { background-color: #282828; }
@@ -61,8 +62,8 @@ html.dark .hover\:text-\[\#F5F2EE\]:hover { color: #0f0f0f; }
 html.dark input:not([type='checkbox']):not([type='radio']):not([type='file']),
 html.dark select,
 html.dark textarea {
-  background-color: #1f1f1f;
-  border-color: #2a2a2a;
+  background-color: #2a2a2a;
+  border-color: #3a3a3a;
   color: #f0ede8;
 }
 html.dark input[type='date'],
@@ -91,3 +92,14 @@ html.dark .text-red-600    { color: #f87171; }
 
 /* Nav sticky header */
 html.dark header { background-color: #1a1a1a; border-color: #2a2a2a; }
+
+/* Misc borders */
+html.dark .border-\[\#f0f0f0\] { border-color: #2a2a2a; }
+html.dark .divide-\[\#ddd\] > :not([hidden]) ~ :not([hidden]) { border-color: #2a2a2a; }
+
+/* Table/section faint bg */
+html.dark .bg-\[\#fafaf8\] { background-color: #1d1d1d; }
+
+/* Badge contrast helpers */
+html.dark .bg-amber-50  { background-color: #2d1f00; }
+html.dark .bg-red-50    { background-color: #2d0000; }

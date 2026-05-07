@@ -509,28 +509,28 @@ export default function AttendancePage() {
     .map(([uid, s]) => ({ uid, ...s, net: getNet(uid) }))
     .sort((a, b) => b.totalMins - a.totalMins)
 
-  // Per-employee per-month flag computation
-  const lateByMonth: Record<string, number> = {}
+  // Per-employee per-month net late flags (fires only on/after 25th of each month)
+  const todayStr2 = getISTDate()
+  const todayYM = todayStr2.slice(0, 7)
+  const todayDay = parseInt(todayStr2.split('-')[2])
+  const lateByMonthUser: Record<string, number> = {}
   for (const row of lateArrivals) {
     const k = `${row.user_id}|${row.date.slice(0, 7)}`
-    lateByMonth[k] = (lateByMonth[k] ?? 0) + (row.minutes_late ?? 0)
+    lateByMonthUser[k] = (lateByMonthUser[k] ?? 0) + (row.minutes_late ?? 0)
   }
-  const lateFlagsByUid: Record<string, 'half_day' | 'full_day'> = {}
-  for (const [k, mins] of Object.entries(lateByMonth)) {
-    const uid = k.split('|')[0]
-    if (mins >= 480) lateFlagsByUid[uid] = 'full_day'
-    else if (mins >= 240 && lateFlagsByUid[uid] !== 'full_day') lateFlagsByUid[uid] = 'half_day'
-  }
-  const otFlaggedUids = new Set<string>()
-  const otByMonth: Record<string, number> = {}
+  const otByMonthUser: Record<string, number> = {}
   for (const e of overtimeEntries) {
     const k = `${e.user_id}|${e.date.slice(0, 7)}`
-    const mins = parseOTDuration(e.overtime_duration)
-    otByMonth[k] = (otByMonth[k] ?? 0) + mins
-    if (mins >= 480) otFlaggedUids.add(e.user_id)
+    otByMonthUser[k] = (otByMonthUser[k] ?? 0) + parseOTDuration(e.overtime_duration)
   }
-  for (const [k, mins] of Object.entries(otByMonth)) {
-    if (mins >= 480) otFlaggedUids.add(k.split('|')[0])
+  const lateFlagsByUid: Record<string, 'half_day' | 'full_day'> = {}
+  for (const k of Object.keys(lateByMonthUser)) {
+    const [uid, month] = k.split('|')
+    const canFlag = month < todayYM || (month === todayYM && todayDay >= 25)
+    if (!canFlag) continue
+    const netLate = (lateByMonthUser[k] ?? 0) - (otByMonthUser[k] ?? 0)
+    if (netLate >= 480) lateFlagsByUid[uid] = 'full_day'
+    else if (netLate >= 240 && lateFlagsByUid[uid] !== 'full_day') lateFlagsByUid[uid] = 'half_day'
   }
 
   const Th = ({ label }: { label: string }) => (
@@ -883,7 +883,6 @@ export default function AttendancePage() {
                         <Th label="Total OT Occurrences" />
                         <Th label="Total OT Hours" />
                         <Th label="Net OT (after late offset)" />
-                        <Th label="Flag" />
                         {isAdmin && <Th label="Admin Note" />}
                       </tr>
                     </thead>
@@ -901,9 +900,6 @@ export default function AttendancePage() {
                                 : net < 0
                                 ? <span className="text-amber-600">Used — {fmtMins(Math.abs(net))} late outstanding</span>
                                 : <span className="text-[#aaa]">Balanced</span>}
-                            </td>
-                            <td className="px-4 py-2.5">
-                              {otFlaggedUids.has(row.uid) && <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 bg-red-50 text-red-600 border border-red-200">OT Flag</span>}
                             </td>
                             {isAdmin && (
                               <td className="px-4 py-2.5">
