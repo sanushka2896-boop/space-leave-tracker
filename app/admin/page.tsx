@@ -112,6 +112,7 @@ export default function AdminPage() {
   const [otRejectingId, setOtRejectingId] = useState<string | null>(null)
   const [otRejectReason, setOtRejectReason] = useState('')
   const [deletingLeaveId, setDeletingLeaveId] = useState<string | null>(null)
+  const [confirmDeleteLeaveId, setConfirmDeleteLeaveId] = useState<string | null>(null)
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null)
   const [teamEditForm, setTeamEditForm] = useState({ name: '', role: '', location: '', is_admin: false })
   const [teamEditSaving, setTeamEditSaving] = useState(false)
@@ -440,6 +441,25 @@ export default function AdminPage() {
 
   async function deleteLeave(id: string) {
     setDeletingLeaveId(id)
+    setConfirmDeleteLeaveId(null)
+    const leave = pendingLeaves.find(l => l.id === id)
+    if (leave?.status === 'approved') {
+      const { data: balRows } = await supabaseAdmin
+        .from('leave_balances').select('balance, allocated')
+        .eq('user_id', leave.user_id).eq('leave_type', leave.type)
+      const bal = (balRows ?? [])[0] ?? null
+      if (bal) {
+        await supabaseAdmin.from('leave_balances').delete()
+          .eq('user_id', leave.user_id).eq('leave_type', leave.type)
+        await supabaseAdmin.from('leave_balances').insert({
+          user_id: leave.user_id,
+          leave_type: leave.type,
+          allocated: bal.allocated,
+          balance: bal.balance + leave.value,
+          year: new Date().getFullYear(),
+        })
+      }
+    }
     await supabaseAdmin.from('leaves').delete().eq('id', id)
     setDeletingLeaveId(null)
     await loadData()
@@ -911,13 +931,30 @@ export default function AdminPage() {
                     >
                       {acting === leave.id + 'approve' ? '…' : 'Approve'}
                     </button>
-                    <button
-                      onClick={() => deleteLeave(leave.id)}
-                      disabled={acting !== null || deletingLeaveId === leave.id}
-                      className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40"
-                    >
-                      {deletingLeaveId === leave.id ? '…' : 'Delete'}
-                    </button>
+                    {confirmDeleteLeaveId === leave.id ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-[#888] tracking-wider">Are you sure?</span>
+                        <button
+                          onClick={() => deleteLeave(leave.id)}
+                          disabled={deletingLeaveId === leave.id}
+                          className="text-xs text-red-500 hover:text-red-700 cursor-pointer disabled:opacity-40 tracking-wider">
+                          {deletingLeaveId === leave.id ? '…' : 'Confirm'}
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteLeaveId(null)}
+                          className="text-xs text-[#aaa] hover:text-[#1a1a1a] cursor-pointer px-0.5">
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDeleteLeaveId(leave.id)}
+                        disabled={acting !== null || deletingLeaveId === leave.id}
+                        className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40"
+                      >
+                        Delete
+                      </button>
+                    )}
                     {rejectingId === leave.id ? (
                       <>
                         <input

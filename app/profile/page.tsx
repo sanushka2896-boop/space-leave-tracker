@@ -67,6 +67,10 @@ export default function ProfilePage() {
   // Leaves tab
   const [allLeaves, setAllLeaves] = useState<Leave[]>([])
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [modifyingId, setModifyingId] = useState<string | null>(null)
+  const [modifyForm, setModifyForm] = useState({ date_from: '', date_to: '', value: '1', reason: '' })
+  const [modifySaving, setModifySaving] = useState(false)
   const [pastCollapsed, setPastCollapsed] = useState(true)
 
   // Reviews tab
@@ -137,13 +141,41 @@ export default function ProfilePage() {
     else setSaved(true)
   }
 
-  function canDeleteLeave(leave: Leave, today: string): boolean {
-    if (leave.type !== 'sick') return false
-    if (isAdmin) return true
-    return leave.date_from >= today || leave.status === 'pending'
+  function calcWorkingDays(from: string, to: string): number {
+    const start = new Date(from + 'T00:00:00')
+    const end = new Date(to + 'T00:00:00')
+    if (start > end) return 0
+    let count = 0
+    const cur = new Date(start)
+    while (cur <= end) {
+      if (cur.getDay() !== 0) count++
+      cur.setDate(cur.getDate() + 1)
+    }
+    return count
   }
 
-  async function deleteLeave(id: string, today: string) {
+  async function cancelLeave(id: string) {
+    setCancellingId(id)
+    const leave = allLeaves.find(l => l.id === id)
+    await supabaseAdmin.from('leaves').update({ status: 'cancelled' }).eq('id', id).eq('user_id', userId)
+    if (leave?.status === 'approved') {
+      const { data: bal } = await supabaseAdmin
+        .from('leave_balances').select('balance, allocated')
+        .eq('user_id', userId).eq('leave_type', leave.type).maybeSingle()
+      if (bal) {
+        await supabaseAdmin.from('leave_balances').upsert({
+          user_id: userId,
+          leave_type: leave.type,
+          allocated: bal.allocated,
+          balance: bal.balance + leave.value,
+        })
+      }
+    }
+    await loadLeaves(userId)
+    setCancellingId(null)
+  }
+
+  async function deleteLeave(id: string) {
     setDeletingId(id)
     const leave = allLeaves.find(l => l.id === id)
     if (leave?.status === 'approved' && leave.type === 'sick') {
@@ -162,6 +194,24 @@ export default function ProfilePage() {
     await supabaseAdmin.from('leaves').delete().eq('id', id).eq('user_id', userId)
     await loadLeaves(userId)
     setDeletingId(null)
+  }
+
+  async function saveModify(id: string) {
+    setModifySaving(true)
+    const dateTo = modifyForm.date_to || modifyForm.date_from
+    const isMultiDay = modifyForm.date_from !== dateTo
+    const value = isMultiDay
+      ? calcWorkingDays(modifyForm.date_from, dateTo)
+      : parseFloat(modifyForm.value) || 1
+    await supabaseAdmin.from('leaves').update({
+      date_from: modifyForm.date_from,
+      date_to: dateTo,
+      value,
+      reason: modifyForm.reason || null,
+    }).eq('id', id).eq('user_id', userId)
+    setModifyingId(null)
+    await loadLeaves(userId)
+    setModifySaving(false)
   }
 
   async function saveNote(reviewId: string) {
@@ -287,7 +337,7 @@ export default function ProfilePage() {
               <p className="text-sm text-[#bbb] tracking-wider">No leave records yet.</p>
             )}
 
-            {/* ONGOING */}
+            {/* ONGOING — no actions, leave is in progress */}
             {leavesOngoing.length > 0 && (
               <div>
                 <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-4">Ongoing</h3>
@@ -301,17 +351,9 @@ export default function ProfilePage() {
                           {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
                         </p>
                       </div>
-                      <div className="flex items-center gap-4">
-                        <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
-                          {leave.status}
-                        </span>
-                        {canDeleteLeave(leave, todayStr) && (
-                          <button onClick={() => deleteLeave(leave.id, todayStr)} disabled={deletingId === leave.id}
-                            className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">
-                            {deletingId === leave.id ? '…' : 'Delete'}
-                          </button>
-                        )}
-                      </div>
+                      <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                        {leave.status}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -326,32 +368,93 @@ export default function ProfilePage() {
               ) : (
                 <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
                   {leavesUpcoming.map(leave => (
-                    <div key={leave.id} className="px-8 py-5 flex items-center justify-between">
-                      <div>
-                        <p className="text-xs tracking-[0.2em] uppercase text-[#1a1a1a]">{leave.type} leave</p>
-                        <p className="text-xs text-[#888] mt-1">
-                          {fmtShort(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmtShort(leave.date_to)}` : ''}
-                          {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
-                          {leave.status}
-                        </span>
-                        {canDeleteLeave(leave, todayStr) && (
-                          <button onClick={() => deleteLeave(leave.id, todayStr)} disabled={deletingId === leave.id}
-                            className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">
-                            {deletingId === leave.id ? '…' : 'Delete'}
-                          </button>
-                        )}
-                      </div>
+                    <div key={leave.id}>
+                      {modifyingId === leave.id ? (
+                        <div className="px-8 py-6 space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="text-[10px] tracking-[0.2em] uppercase text-[#888] block mb-1">From</label>
+                              <input type="date" value={modifyForm.date_from}
+                                onChange={e => setModifyForm({ ...modifyForm, date_from: e.target.value })}
+                                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] tracking-[0.2em] uppercase text-[#888] block mb-1">To</label>
+                              <input type="date" value={modifyForm.date_to}
+                                min={modifyForm.date_from}
+                                onChange={e => setModifyForm({ ...modifyForm, date_to: e.target.value })}
+                                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                            </div>
+                          </div>
+                          {modifyForm.date_from === (modifyForm.date_to || modifyForm.date_from) && (
+                            <div>
+                              <label className="text-[10px] tracking-[0.2em] uppercase text-[#888] block mb-1">Duration</label>
+                              <select value={modifyForm.value}
+                                onChange={e => setModifyForm({ ...modifyForm, value: e.target.value })}
+                                className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
+                                <option value="1">Full Day</option>
+                                <option value="0.5">Half Day</option>
+                              </select>
+                            </div>
+                          )}
+                          <div>
+                            <label className="text-[10px] tracking-[0.2em] uppercase text-[#888] block mb-1">Reason</label>
+                            <input type="text" value={modifyForm.reason}
+                              onChange={e => setModifyForm({ ...modifyForm, reason: e.target.value })}
+                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
+                          </div>
+                          <div className="flex gap-3">
+                            <button onClick={() => saveModify(leave.id)} disabled={modifySaving || !modifyForm.date_from}
+                              className="px-6 py-2 border border-[#1a1a1a] text-xs tracking-wider uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                              {modifySaving ? '…' : 'Save'}
+                            </button>
+                            <button onClick={() => setModifyingId(null)}
+                              className="px-6 py-2 border border-[#ddd] text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer">
+                              Discard
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="px-8 py-5 flex items-center justify-between">
+                          <div>
+                            <p className="text-xs tracking-[0.2em] uppercase text-[#1a1a1a]">{leave.type} leave</p>
+                            <p className="text-xs text-[#888] mt-1">
+                              {fmtShort(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmtShort(leave.date_to)}` : ''}
+                              {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                              {leave.status}
+                            </span>
+                            {leave.status === 'pending' && (
+                              <button
+                                onClick={() => { setModifyingId(leave.id); setModifyForm({ date_from: leave.date_from, date_to: leave.date_to, value: String(leave.value), reason: leave.reason || '' }) }}
+                                className="text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer">
+                                Modify
+                              </button>
+                            )}
+                            {leave.type === 'sick' ? (
+                              <button onClick={() => deleteLeave(leave.id)} disabled={deletingId === leave.id}
+                                className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">
+                                {deletingId === leave.id ? '…' : 'Delete'}
+                              </button>
+                            ) : (
+                              <button onClick={() => cancelLeave(leave.id)} disabled={cancellingId === leave.id}
+                                className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">
+                                {cancellingId === leave.id ? '…' : 'Cancel'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
             </div>
 
-            {/* PAST */}
+            {/* PAST — no actions */}
             {leavesPast.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-4">
@@ -373,17 +476,9 @@ export default function ProfilePage() {
                           {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
                         </p>
                       </div>
-                      <div className="flex items-center gap-4">
-                        <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
-                          {leave.status}
-                        </span>
-                        {canDeleteLeave(leave, todayStr) && (
-                          <button onClick={() => deleteLeave(leave.id, todayStr)} disabled={deletingId === leave.id}
-                            className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 cursor-pointer disabled:opacity-40">
-                            {deletingId === leave.id ? '…' : 'Delete'}
-                          </button>
-                        )}
-                      </div>
+                      <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                        {leave.status}
+                      </span>
                     </div>
                   ))}
                 </div>
