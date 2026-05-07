@@ -77,6 +77,7 @@ export default function Dashboard() {
   const [clockAction, setClockAction] = useState(false)
   const [clockError, setClockError] = useState('')
   const [allClockLogs, setAllClockLogs] = useState<ClockLog[]>([])
+  const [nextReview, setNextReview] = useState<{ date: string; type: string } | null>(null)
   const router = useRouter()
 
   async function loadClockData(uid: string, adminFlag: boolean) {
@@ -138,6 +139,7 @@ export default function Dashboard() {
       { data: holidayRows },
       { data: wsRows },
       { data: myWsRows },
+      { data: reviewRows },
     ] = await Promise.all([
       supabaseAdmin.from('leave_balances').select('leave_type, allocated, balance').eq('user_id', uid),
       supabaseAdmin.from('leave_types').select('key, label, sort_order').eq('is_active', true).order('sort_order'),
@@ -146,6 +148,7 @@ export default function Dashboard() {
       supabaseAdmin.from('holidays').select('id, name, date').gte('date', todayStr).order('date', { ascending: true }).limit(3),
       supabaseAdmin.from('working_saturdays').select('id, date').is('user_id', null).gte('date', todayStr).order('date', { ascending: true }),
       supabaseAdmin.from('working_saturdays').select('id, date').eq('user_id', uid).order('date', { ascending: false }).limit(10),
+      supabaseAdmin.from('reviews').select('date, type').eq('user_id', uid).gte('date', todayStr).order('date', { ascending: true }).limit(1),
     ])
 
     const typeLabelMap: Record<string, { label: string; sort: number }> = {}
@@ -192,6 +195,7 @@ export default function Dashboard() {
     })
     setHolidays(holidayRows ?? [])
     setWorkingSats({ company: wsRows ?? [], personal: myWsRows ?? [] })
+    setNextReview(reviewRows?.[0] ?? null)
   }
 
   useEffect(() => {
@@ -306,6 +310,19 @@ export default function Dashboard() {
             Apply for Leave
           </button>
         </div>
+
+        {/* Next Review */}
+        {nextReview && (
+          <div className="mb-8 border border-[#ddd] bg-white px-8 py-4 flex items-center justify-between">
+            <div>
+              <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-1">Your Next Review</p>
+              <p className="text-sm font-light text-[#1a1a1a]">{fmt(nextReview.date)}</p>
+            </div>
+            <span className="text-[9px] tracking-[0.2em] uppercase text-[#888] border border-[#ddd] px-3 py-1">
+              {nextReview.type === 'bi-annual' ? 'Mid-Year' : nextReview.type === 'annual' ? 'Annual' : nextReview.type}
+            </span>
+          </div>
+        )}
 
         {/* Clock In */}
         <div className="mb-12">

@@ -130,6 +130,15 @@ export default function AdminPage() {
   const [nhPreview, setNhPreview] = useState<{ date: string; name: string; selected: boolean }[]>([])
   const [nhSaving, setNhSaving] = useState(false)
 
+  // Flags + deductions
+  const [allLateData, setAllLateData] = useState<{ user_id: string; date: string; minutes_late: number | null; users?: { name: string } | null }[]>([])
+  const [allOtData, setAllOtData] = useState<{ user_id: string; date: string; overtime_duration: string | null; users?: { name: string } | null }[]>([])
+  const [attendanceDeductions, setAttendanceDeductions] = useState<{ user_id: string; month: string; flag_type: string }[]>([])
+  const [flagModal, setFlagModal] = useState<{ userId: string; name: string; month: string; flagType: string; amount: number; deductDays: number } | null>(null)
+  const [flagDeducting, setFlagDeducting] = useState(false)
+  const [retroRunning, setRetroRunning] = useState(false)
+  const [retroResult, setRetroResult] = useState('')
+
   const router = useRouter()
 
   async function loadOvertimeEntries() {
@@ -196,7 +205,7 @@ export default function AdminPage() {
         .from('users').select('id, is_admin').eq('email', session.user.email).single()
       if (!dbUser?.is_admin) { router.push('/dashboard'); return }
       setAdminUserId(dbUser.id)
-      await Promise.all([loadData(), loadOvertimeEntries()])
+      await Promise.all([loadData(), loadOvertimeEntries(), loadFlagData()])
       setLoading(false)
     })
   }, [])
@@ -459,9 +468,116 @@ export default function AdminPage() {
     return `${years}y ${months}m`
   }
 
+  function parseOTDurationLocal(s: string | null) {
+    if (!s) return 0
+    const h = parseInt(s.match(/(\d+)\s*hr/)?.[1] ?? '0')
+    const m = parseInt(s.match(/(\d+)\s*min/)?.[1] ?? '0')
+    return h * 60 + m
+  }
+
+  async function loadFlagData() {
+    const [{ data: late }, { data: ot }, { data: deds }] = await Promise.all([
+      supabaseAdmin.from('late_arrivals').select('user_id, date, minutes_late, users(name)'),
+      supabaseAdmin.from('overtime_entries').select('user_id, date, overtime_duration, users(name)'),
+      supabaseAdmin.from('attendance_deductions').select('user_id, month, flag_type'),
+    ])
+    setAllLateData((late ?? []) as unknown as typeof allLateData)
+    setAllOtData((ot ?? []) as unknown as typeof allOtData)
+    setAttendanceDeductions((deds ?? []) as typeof attendanceDeductions)
+  }
+
+  function computeFlags() {
+    const lateByMonth: Record<string, { name: string; mins: number }> = {}
+    for (const row of allLateData) {
+      const k = `${row.user_id}|${row.date.slice(0, 7)}`
+      if (!lateByMonth[k]) lateByMonth[k] = { name: (row.users as any)?.name || '—', mins: 0 }
+      lateByMonth[k].mins += row.minutes_late ?? 0
+    }
+    const otByMonth: Record<string, { name: string; mins: number; hasSingle: boolean }> = {}
+    for (const e of allOtData) {
+      const k = `${e.user_id}|${e.date.slice(0, 7)}`
+      const mins = parseOTDurationLocal(e.overtime_duration)
+      if (!otByMonth[k]) otByMonth[k] = { name: (e.users as any)?.name || '—', mins: 0, hasSingle: false }
+      otByMonth[k].mins += mins
+      if (mins >= 480) otByMonth[k].hasSingle = true
+    }
+    const flags: { userId: string; name: string; month: string; flagType: string; amount: number; deductDays: number }[] = []
+    for (const [k, d] of Object.entries(lateByMonth)) {
+      const [userId, month] = k.split('|')
+      const resolved = attendanceDeductions.some(x => x.user_id === userId && x.month === month && (x.flag_type === 'full_day' || x.flag_type === 'half_day'))
+      if (resolved) continue
+      if (d.mins >= 480) flags.push({ userId, name: d.name, month, flagType: 'full_day', amount: d.mins, deductDays: 1 })
+      else if (d.mins >= 240) flags.push({ userId, name: d.name, month, flagType: 'half_day', amount: d.mins, deductDays: 0.5 })
+    }
+    for (const [k, d] of Object.entries(otByMonth)) {
+      const [userId, month] = k.split('|')
+      if (d.mins < 480 && !d.hasSingle) continue
+      if (attendanceDeductions.some(x => x.user_id === userId && x.month === month && x.flag_type === 'ot_flag')) continue
+      flags.push({ userId, name: d.name, month, flagType: 'ot_flag', amount: d.mins, deductDays: 0 })
+    }
+    return flags
+  }
+
+  async function deductLeaveForFlag(flag: { userId: string; name: string; month: string; flagType: string; deductDays: number }) {
+    setFlagDeducting(true)
+    if (flag.deductDays > 0) {
+      const { data: bal } = await supabaseAdmin.from('leave_balances').select('balance, allocated')
+        .eq('user_id', flag.userId).eq('leave_type', 'earned').maybeSingle()
+      await supabaseAdmin.from('leave_balances').upsert({
+        user_id: flag.userId, leave_type: 'earned',
+        allocated: bal?.allocated ?? 0, balance: (bal?.balance ?? 0) - flag.deductDays,
+      })
+      await supabaseAdmin.from('leaves').insert({
+        user_id: flag.userId, type: 'earned',
+        date_from: flag.month + '-01', date_to: flag.month + '-01',
+        value: flag.deductDays,
+        reason: `Attendance deduction — ${flag.flagType === 'half_day' ? 'half day' : 'full day'} (${flag.month})`,
+        status: 'approved',
+      })
+    }
+    await supabaseAdmin.from('attendance_deductions').insert({
+      user_id: flag.userId, month: flag.month, flag_type: flag.flagType,
+      leave_deducted: flag.deductDays,
+      note: `Flag cleared by admin — ${flag.month}`,
+    })
+    setFlagModal(null)
+    await loadFlagData()
+    setFlagDeducting(false)
+  }
+
+  async function autoInsertReviews(userId: string, doj: string) {
+    const d = new Date(doj + 'T00:00:00')
+    const bi = new Date(d); bi.setMonth(bi.getMonth() + 6)
+    const ann = new Date(d); ann.setFullYear(ann.getFullYear() + 1)
+    const fmt = (dt: Date) => dt.toISOString().split('T')[0]
+    const { data: existing } = await supabaseAdmin.from('reviews').select('id').eq('user_id', userId)
+    if (!existing || existing.length === 0) {
+      await supabaseAdmin.from('reviews').insert([
+        { user_id: userId, date: fmt(bi), type: 'bi-annual', notes: 'Auto-scheduled from DOJ' },
+        { user_id: userId, date: fmt(ann), type: 'annual', notes: 'Auto-scheduled from DOJ' },
+      ])
+    }
+  }
+
+  async function runRetroactiveReviews() {
+    setRetroRunning(true)
+    let count = 0
+    for (const m of team) {
+      if (!m.date_of_joining) continue
+      const { data: existing } = await supabaseAdmin.from('reviews').select('id').eq('user_id', m.id)
+      if (existing && existing.length > 0) continue
+      await autoInsertReviews(m.id, m.date_of_joining)
+      count++
+    }
+    setRetroResult(`Added reviews for ${count} employee${count !== 1 ? 's' : ''}`)
+    setRetroRunning(false)
+    await loadData()
+  }
+
   async function saveJoiningDate(id: string) {
     setJoiningEditSaving(true)
     await supabaseAdmin.from('users').update({ date_of_joining: joiningEditDate || null }).eq('id', id)
+    if (joiningEditDate) await autoInsertReviews(id, joiningEditDate)
     setEditingJoiningId(null)
     await loadData()
     setJoiningEditSaving(false)
@@ -560,6 +676,7 @@ export default function AdminPage() {
   if (loading) return null
 
   return (
+    <>
     <main className="min-h-screen bg-[#F5F2EE]">
       <Nav isAdmin={true} />
 
@@ -643,6 +760,53 @@ export default function AdminPage() {
             </div>
           )}
         </section>
+
+        {/* Attendance Flags */}
+        {(() => {
+          const flags = computeFlags()
+          if (flags.length === 0) return null
+          const flagLabel = (t: string) =>
+            t === 'full_day' ? 'Full Day Deduction' : t === 'half_day' ? 'Half Day Deduction' : 'OT Flag'
+          const flagCls = (t: string) =>
+            t === 'ot_flag' ? 'text-amber-600 bg-amber-50 border-amber-200' : 'text-red-600 bg-red-50 border-red-200'
+          return (
+            <section>
+              <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">
+                Attendance Flags <span className="text-red-500 ml-2">({flags.length})</span>
+              </h3>
+              <div className="border border-[#ddd] bg-white overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#eee] bg-[#fafafa]">
+                      {['Name', 'Type', 'Amount', 'Month', ''].map(h => (
+                        <th key={h} className="px-5 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f5f5f5]">
+                    {flags.map((f, i) => (
+                      <tr key={i} className="hover:bg-[#fafafa]">
+                        <td className="px-5 py-3 text-xs text-[#1a1a1a]">{f.name}</td>
+                        <td className="px-5 py-3">
+                          <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${flagCls(f.flagType)}`}>{flagLabel(f.flagType)}</span>
+                        </td>
+                        <td className="px-5 py-3 text-xs text-[#888]">{Math.round(f.amount)} mins</td>
+                        <td className="px-5 py-3 text-xs text-[#888]">{f.month}</td>
+                        <td className="px-5 py-3">
+                          <button
+                            onClick={() => setFlagModal({ userId: f.userId, name: f.name, month: f.month, flagType: f.flagType, amount: f.amount, deductDays: f.deductDays })}
+                            className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
+                            {f.deductDays > 0 ? 'Deduct Leave' : 'Clear Flag'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )
+        })()}
 
         {/* Pending Leave Requests */}
         <section>
@@ -1161,6 +1325,14 @@ export default function AdminPage() {
             <span className="text-[10px] text-[#aaa] tracking-wider">Columns: name, date_of_joining (YYYY-MM-DD)</span>
             {csvErr && <p className="text-xs text-red-400">{csvErr}</p>}
             {csvSuccess && <p className="text-xs text-emerald-600">{csvSuccess}</p>}
+            <button
+              onClick={runRetroactiveReviews}
+              disabled={retroRunning}
+              className="px-5 py-2 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40"
+            >
+              {retroRunning ? 'Running…' : 'Retroactive Reviews'}
+            </button>
+            {retroResult && <p className="text-xs text-emerald-600">{retroResult}</p>}
           </div>
 
           <div className="border border-[#ddd] bg-white overflow-x-auto">
@@ -1308,5 +1480,34 @@ export default function AdminPage() {
 
       </div>
     </main>
+
+    {/* Flag deduction confirm modal */}
+    {flagModal && (
+      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+        <div className="bg-white border border-[#ddd] p-8 max-w-sm w-full mx-4">
+          <p className="text-xs tracking-[0.25em] uppercase text-[#888] mb-4">Confirm Action</p>
+          <p className="text-sm text-[#1a1a1a] mb-1">{flagModal.name}</p>
+          <p className="text-xs text-[#888] mb-1">
+            Flag: <span className="uppercase">{flagModal.flagType.replace('_', ' ')}</span> — {flagModal.month}
+          </p>
+          <p className="text-xs text-[#888] mb-6">
+            {flagModal.deductDays > 0
+              ? `This will deduct ${flagModal.deductDays} day${flagModal.deductDays !== 1 ? 's' : ''} from their Earned Leave balance.`
+              : 'No leave deduction. This will clear the OT flag for this month.'}
+          </p>
+          <div className="flex gap-3">
+            <button onClick={() => deductLeaveForFlag(flagModal)} disabled={flagDeducting}
+              className="flex-1 py-2 border border-[#1a1a1a] text-xs tracking-[0.2em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">
+              {flagDeducting ? '…' : flagModal.deductDays > 0 ? 'Deduct & Clear' : 'Clear Flag'}
+            </button>
+            <button onClick={() => setFlagModal(null)} disabled={flagDeducting}
+              className="px-5 py-2 border border-[#ddd] text-xs uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer disabled:opacity-40">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   )
 }

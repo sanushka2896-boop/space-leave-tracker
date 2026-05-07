@@ -152,6 +152,10 @@ export default function AttendancePage() {
   const [showBalanceLogs, setShowBalanceLogs] = useState(false)
   const [generatingLogs, setGeneratingLogs] = useState(false)
 
+  // Admin notes on summary rows
+  const [adminNotes, setAdminNotes] = useState<Record<string, { lateNote: string; otNote: string }>>({})
+  const [adminNoteSaving, setAdminNoteSaving] = useState<string | null>(null)
+
   async function loadClockLogs(uid: string, adminFlag: boolean) {
     const today = getISTDate()
     if (adminFlag) {
@@ -200,6 +204,28 @@ export default function AttendancePage() {
     setBalanceLogs((data ?? []) as BalanceLog[])
   }
 
+  async function loadAdminNotes() {
+    const { data } = await supabaseAdmin.from('attendance_admin_notes').select('*')
+    const map: Record<string, { lateNote: string; otNote: string }> = {}
+    for (const row of data ?? []) map[row.user_id] = { lateNote: row.late_note ?? '', otNote: row.ot_note ?? '' }
+    setAdminNotes(map)
+  }
+
+  async function saveAdminNote(userId: string, field: 'late_note' | 'ot_note', value: string) {
+    setAdminNoteSaving(userId + field)
+    const cur = adminNotes[userId] ?? { lateNote: '', otNote: '' }
+    await supabaseAdmin.from('attendance_admin_notes').upsert({
+      user_id: userId,
+      late_note: field === 'late_note' ? (value || null) : (cur.lateNote || null),
+      ot_note: field === 'ot_note' ? (value || null) : (cur.otNote || null),
+    }, { onConflict: 'user_id' })
+    setAdminNotes(prev => ({
+      ...prev,
+      [userId]: field === 'late_note' ? { ...cur, lateNote: value } : { ...cur, otNote: value },
+    }))
+    setAdminNoteSaving(null)
+  }
+
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) { router.push('/'); return }
@@ -218,6 +244,7 @@ export default function AttendancePage() {
         loadLate(),
         loadOvertime(dbUser.id, adminFlag),
         loadBalanceLogs(),
+        loadAdminNotes(),
       ])
       setLoading(false)
     })
@@ -482,6 +509,30 @@ export default function AttendancePage() {
     .map(([uid, s]) => ({ uid, ...s, net: getNet(uid) }))
     .sort((a, b) => b.totalMins - a.totalMins)
 
+  // Per-employee per-month flag computation
+  const lateByMonth: Record<string, number> = {}
+  for (const row of lateArrivals) {
+    const k = `${row.user_id}|${row.date.slice(0, 7)}`
+    lateByMonth[k] = (lateByMonth[k] ?? 0) + (row.minutes_late ?? 0)
+  }
+  const lateFlagsByUid: Record<string, 'half_day' | 'full_day'> = {}
+  for (const [k, mins] of Object.entries(lateByMonth)) {
+    const uid = k.split('|')[0]
+    if (mins >= 480) lateFlagsByUid[uid] = 'full_day'
+    else if (mins >= 240 && lateFlagsByUid[uid] !== 'full_day') lateFlagsByUid[uid] = 'half_day'
+  }
+  const otFlaggedUids = new Set<string>()
+  const otByMonth: Record<string, number> = {}
+  for (const e of overtimeEntries) {
+    const k = `${e.user_id}|${e.date.slice(0, 7)}`
+    const mins = parseOTDuration(e.overtime_duration)
+    otByMonth[k] = (otByMonth[k] ?? 0) + mins
+    if (mins >= 480) otFlaggedUids.add(e.user_id)
+  }
+  for (const [k, mins] of Object.entries(otByMonth)) {
+    if (mins >= 480) otFlaggedUids.add(k.split('|')[0])
+  }
+
   const Th = ({ label }: { label: string }) => (
     <th className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{label}</th>
   )
@@ -574,11 +625,14 @@ export default function AttendancePage() {
                         <Th label="Total Late Occurrences" />
                         <Th label="Total Minutes Late" />
                         <Th label="Net Late (after OT offset)" />
+                        <Th label="Flag" />
+                        {isAdmin && <Th label="Admin Note" />}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#f5f5f5]">
                       {lateSummaryRows.map(row => {
                         const net = row.net
+                        const flag = lateFlagsByUid[row.uid]
                         return (
                           <tr key={row.uid} className="hover:bg-[#fafafa]">
                             <td className="px-4 py-2.5 text-xs text-[#1a1a1a]">{row.name}</td>
@@ -589,6 +643,23 @@ export default function AttendancePage() {
                                 ? <span className="text-emerald-600">Clear — {fmtMins(net)} OT surplus</span>
                                 : <span className="text-amber-600">{fmtMins(Math.abs(net))} remaining</span>}
                             </td>
+                            <td className="px-4 py-2.5">
+                              {flag === 'full_day' && <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 bg-red-50 text-red-600 border border-red-200">Full Day Deduction</span>}
+                              {flag === 'half_day' && <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 bg-amber-50 text-amber-600 border border-amber-200">Half Day Deduction</span>}
+                            </td>
+                            {isAdmin && (
+                              <td className="px-4 py-2.5">
+                                <input
+                                  type="text"
+                                  value={adminNotes[row.uid]?.lateNote ?? ''}
+                                  onChange={e => setAdminNotes(prev => ({ ...prev, [row.uid]: { ...(prev[row.uid] ?? { lateNote: '', otNote: '' }), lateNote: e.target.value } }))}
+                                  onBlur={e => saveAdminNote(row.uid, 'late_note', e.target.value)}
+                                  disabled={adminNoteSaving === row.uid + 'late_note'}
+                                  placeholder="Admin note…"
+                                  className="border border-[#ddd] bg-white px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none w-36"
+                                />
+                              </td>
+                            )}
                           </tr>
                         )
                       })}
@@ -812,6 +883,8 @@ export default function AttendancePage() {
                         <Th label="Total OT Occurrences" />
                         <Th label="Total OT Hours" />
                         <Th label="Net OT (after late offset)" />
+                        <Th label="Flag" />
+                        {isAdmin && <Th label="Admin Note" />}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#f5f5f5]">
@@ -829,6 +902,22 @@ export default function AttendancePage() {
                                 ? <span className="text-amber-600">Used — {fmtMins(Math.abs(net))} late outstanding</span>
                                 : <span className="text-[#aaa]">Balanced</span>}
                             </td>
+                            <td className="px-4 py-2.5">
+                              {otFlaggedUids.has(row.uid) && <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 bg-red-50 text-red-600 border border-red-200">OT Flag</span>}
+                            </td>
+                            {isAdmin && (
+                              <td className="px-4 py-2.5">
+                                <input
+                                  type="text"
+                                  value={adminNotes[row.uid]?.otNote ?? ''}
+                                  onChange={e => setAdminNotes(prev => ({ ...prev, [row.uid]: { ...(prev[row.uid] ?? { lateNote: '', otNote: '' }), otNote: e.target.value } }))}
+                                  onBlur={e => saveAdminNote(row.uid, 'ot_note', e.target.value)}
+                                  disabled={adminNoteSaving === row.uid + 'ot_note'}
+                                  placeholder="Admin note…"
+                                  className="border border-[#ddd] bg-white px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none w-36"
+                                />
+                              </td>
+                            )}
                           </tr>
                         )
                       })}
