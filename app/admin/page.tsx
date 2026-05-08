@@ -118,6 +118,11 @@ export default function AdminPage() {
   const [teamEditSaving, setTeamEditSaving] = useState(false)
   const [deletingOTAdminId, setDeletingOTAdminId] = useState<string | null>(null)
 
+  // Reset All Leaves
+  const [resetLeavesOpen, setResetLeavesOpen] = useState(false)
+  const [resetLeavesInput, setResetLeavesInput] = useState('')
+  const [resetLeavesRunning, setResetLeavesRunning] = useState(false)
+
   // Employee Records
   const [editingJoiningId, setEditingJoiningId] = useState<string | null>(null)
   const [joiningEditDate, setJoiningEditDate] = useState('')
@@ -761,6 +766,15 @@ export default function AdminPage() {
     setNhSaving(false)
   }
 
+  async function resetAllLeaves() {
+    setResetLeavesRunning(true)
+    await supabaseAdmin.from('leaves').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    await loadData()
+    setResetLeavesRunning(false)
+    setResetLeavesOpen(false)
+    setResetLeavesInput('')
+  }
+
   if (loading) return null
 
   return (
@@ -898,10 +912,44 @@ export default function AdminPage() {
 
         {/* Pending Leave Requests */}
         <section>
-          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">
-            Pending Requests
-            {pendingLeaves.length > 0 && <span className="ml-3 text-amber-600">({pendingLeaves.length})</span>}
-          </h3>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-xs tracking-[0.3em] uppercase text-[#888]">
+              Pending Requests
+              {pendingLeaves.length > 0 && <span className="ml-3 text-amber-600">({pendingLeaves.length})</span>}
+            </h3>
+            <button
+              onClick={() => { setResetLeavesOpen(true); setResetLeavesInput('') }}
+              className="text-[9px] tracking-[0.2em] uppercase text-red-400 hover:text-red-600 border border-red-200 hover:border-red-400 px-3 py-1.5 transition-colors cursor-pointer">
+              Reset All
+            </button>
+          </div>
+          {resetLeavesOpen && (
+            <div className="border border-red-200 bg-red-50 px-6 py-5 mb-6">
+              <p className="text-xs text-red-700 mb-3 tracking-wider">
+                This will permanently delete <strong>all leave records</strong> for all employees. This cannot be undone.
+              </p>
+              <div className="flex items-center gap-3 flex-wrap">
+                <input
+                  type="text"
+                  placeholder="Type RESET to confirm"
+                  value={resetLeavesInput}
+                  onChange={e => setResetLeavesInput(e.target.value)}
+                  className="border border-red-300 bg-white px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none w-48"
+                />
+                <button
+                  onClick={resetAllLeaves}
+                  disabled={resetLeavesInput !== 'RESET' || resetLeavesRunning}
+                  className="px-4 py-1.5 border border-red-500 text-[9px] tracking-wider uppercase text-red-500 hover:bg-red-500 hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                  {resetLeavesRunning ? '…' : 'Confirm Reset'}
+                </button>
+                <button
+                  onClick={() => { setResetLeavesOpen(false); setResetLeavesInput('') }}
+                  className="text-xs text-[#aaa] hover:text-[#1a1a1a] cursor-pointer">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
           {actionError && <p className="text-xs text-red-400 tracking-wider mb-4">{actionError}</p>}
           {pendingLeaves.length === 0 ? (
             <p className="text-sm text-[#bbb] tracking-wider">No pending requests.</p>

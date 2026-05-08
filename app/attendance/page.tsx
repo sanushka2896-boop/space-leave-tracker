@@ -152,6 +152,16 @@ export default function AttendancePage() {
   const [showBalanceLogs, setShowBalanceLogs] = useState(false)
   const [generatingLogs, setGeneratingLogs] = useState(false)
 
+  // Reset All — Late Arrivals
+  const [resetLateOpen, setResetLateOpen] = useState(false)
+  const [resetLateInput, setResetLateInput] = useState('')
+  const [resetLateRunning, setResetLateRunning] = useState(false)
+
+  // Reset All — Overtime
+  const [resetOTOpen, setResetOTOpen] = useState(false)
+  const [resetOTInput, setResetOTInput] = useState('')
+  const [resetOTRunning, setResetOTRunning] = useState(false)
+
   // Admin notes on summary rows
   const [adminNotes, setAdminNotes] = useState<Record<string, { lateNote: string; otNote: string }>>({})
   const [adminNoteSaving, setAdminNoteSaving] = useState<string | null>(null)
@@ -224,6 +234,24 @@ export default function AttendancePage() {
       [userId]: field === 'late_note' ? { ...cur, lateNote: value } : { ...cur, otNote: value },
     }))
     setAdminNoteSaving(null)
+  }
+
+  async function resetAllLate() {
+    setResetLateRunning(true)
+    await supabaseAdmin.from('late_arrivals').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    await loadLate()
+    setResetLateRunning(false)
+    setResetLateOpen(false)
+    setResetLateInput('')
+  }
+
+  async function resetAllOT() {
+    setResetOTRunning(true)
+    await supabaseAdmin.from('overtime_entries').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    await loadOvertime(userId, isAdmin)
+    setResetOTRunning(false)
+    setResetOTOpen(false)
+    setResetOTInput('')
   }
 
   useEffect(() => {
@@ -795,6 +823,44 @@ export default function AttendancePage() {
               </div>
             )}
 
+            {isAdmin && (
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-[10px] tracking-[0.3em] uppercase text-[#888]">Late Arrivals Log</p>
+                <button
+                  onClick={() => { setResetLateOpen(true); setResetLateInput('') }}
+                  className="text-[9px] tracking-[0.2em] uppercase text-red-400 hover:text-red-600 border border-red-200 hover:border-red-400 px-3 py-1.5 transition-colors cursor-pointer">
+                  Reset All
+                </button>
+              </div>
+            )}
+            {resetLateOpen && (
+              <div className="border border-red-200 bg-red-50 px-6 py-5 mb-6">
+                <p className="text-xs text-red-700 mb-3 tracking-wider">
+                  This will permanently delete <strong>all late arrival records</strong>. This cannot be undone.
+                </p>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <input
+                    type="text"
+                    placeholder="Type RESET to confirm"
+                    value={resetLateInput}
+                    onChange={e => setResetLateInput(e.target.value)}
+                    className="border border-red-300 bg-white px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none w-48"
+                  />
+                  <button
+                    onClick={resetAllLate}
+                    disabled={resetLateInput !== 'RESET' || resetLateRunning}
+                    className="px-4 py-1.5 border border-red-500 text-[9px] tracking-wider uppercase text-red-500 hover:bg-red-500 hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                    {resetLateRunning ? '…' : 'Confirm Reset'}
+                  </button>
+                  <button
+                    onClick={() => { setResetLateOpen(false); setResetLateInput('') }}
+                    className="text-xs text-[#aaa] hover:text-[#1a1a1a] cursor-pointer">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
             {lateArrivals.length === 0 ? (
               <p className="text-sm text-[#bbb] tracking-wider">No late arrivals recorded.</p>
             ) : (
@@ -1025,6 +1091,44 @@ export default function AttendancePage() {
             </div>
 
             {/* Overtime table grouped by month */}
+            {isAdmin && (
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-[10px] tracking-[0.3em] uppercase text-[#888]">Overtime Log</p>
+                <button
+                  onClick={() => { setResetOTOpen(true); setResetOTInput('') }}
+                  className="text-[9px] tracking-[0.2em] uppercase text-red-400 hover:text-red-600 border border-red-200 hover:border-red-400 px-3 py-1.5 transition-colors cursor-pointer">
+                  Reset All
+                </button>
+              </div>
+            )}
+            {resetOTOpen && (
+              <div className="border border-red-200 bg-red-50 px-6 py-5 mb-6">
+                <p className="text-xs text-red-700 mb-3 tracking-wider">
+                  This will permanently delete <strong>all overtime records</strong>. This cannot be undone.
+                </p>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <input
+                    type="text"
+                    placeholder="Type RESET to confirm"
+                    value={resetOTInput}
+                    onChange={e => setResetOTInput(e.target.value)}
+                    className="border border-red-300 bg-white px-3 py-1.5 text-xs text-[#1a1a1a] focus:outline-none w-48"
+                  />
+                  <button
+                    onClick={resetAllOT}
+                    disabled={resetOTInput !== 'RESET' || resetOTRunning}
+                    className="px-4 py-1.5 border border-red-500 text-[9px] tracking-wider uppercase text-red-500 hover:bg-red-500 hover:text-white transition-all cursor-pointer disabled:opacity-40">
+                    {resetOTRunning ? '…' : 'Confirm Reset'}
+                  </button>
+                  <button
+                    onClick={() => { setResetOTOpen(false); setResetOTInput('') }}
+                    className="text-xs text-[#aaa] hover:text-[#1a1a1a] cursor-pointer">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
             {overtimeEntries.length === 0 ? (
               <p className="text-sm text-[#bbb] tracking-wider">No overtime entries yet.</p>
             ) : (

@@ -175,6 +175,12 @@ export default function Dashboard() {
     const futureApproved = leaves.filter((l: any) => l.status === 'approved' && l.date_from >= todayStr)
     const sumByType = (arr: any[], ...types: string[]) => arr.filter(l => types.includes(l.type)).reduce((s: number, l: any) => s + l.value, 0)
 
+    // Track which mat/mis types have an approved record
+    const approvedMatOrMis = new Set(
+      leaves.filter((l: any) => l.status === 'approved' && (l.type === 'maternity' || l.type === 'miscarriage'))
+        .map((l: any) => l.type as string)
+    )
+
     // Normalize casual→earned and deduplicate rows (keep highest allocated)
     const normalized: Record<string, { leave_type: string; allocated: number; balance: number }> = {}
     for (const r of balRows ?? []) {
@@ -185,7 +191,13 @@ export default function Dashboard() {
     }
 
     const balanceItems: BalanceItem[] = Object.values(normalized)
-      .filter((r) => r.allocated > 0 || Math.abs(r.balance) > 0)
+      .filter((r) => {
+        if (r.allocated <= 0 && Math.abs(r.balance) <= 0) return false
+        if (r.leave_type === 'maternity' || r.leave_type === 'miscarriage') {
+          return approvedMatOrMis.has(r.leave_type)
+        }
+        return true
+      })
       .sort((a, b) => (typeLabelMap[a.leave_type]?.sort ?? 99) - (typeLabelMap[b.leave_type]?.sort ?? 99))
       .map((r) => ({
         key: r.leave_type,
@@ -197,9 +209,11 @@ export default function Dashboard() {
       }))
 
     setBalances(balanceItems)
-    setMyLeaves(leaves.filter((l: any) =>
-      l.status === 'pending' || (l.status === 'approved' && l.date_from >= todayStr)
-    ))
+    setMyLeaves(leaves.filter((l: any) => {
+      const isMatOrMis = l.type === 'maternity' || l.type === 'miscarriage'
+      if (isMatOrMis) return l.status === 'approved' && l.date_from >= todayStr
+      return l.status === 'pending' || (l.status === 'approved' && l.date_from >= todayStr)
+    }))
 
     const allTeam = (teamLeavesRaw ?? []).map((l: any) => ({
       name: (l.users as any)?.name || 'Team', type: l.type, date_from: l.date_from, date_to: l.date_to,
