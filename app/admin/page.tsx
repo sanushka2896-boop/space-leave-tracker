@@ -75,6 +75,19 @@ const STATUS_STYLES: Record<string, string> = {
   cancelled: 'text-[#bbb] bg-[#f5f5f5]',
 }
 
+const LEAVE_LABEL_FALLBACKS: Record<string, string> = {
+  earned: 'Earned Leave',
+  casual: 'Earned Leave',
+  wfh: 'WFH',
+  sick: 'Sick Leave',
+  maternity: 'Maternity Leave',
+  miscarriage: 'Miscarriage Leave',
+  sabbatical: 'Sabbatical',
+}
+function labelForType(key: string): string {
+  return LEAVE_LABEL_FALLBACKS[key] ?? key
+}
+
 export default function AdminPage() {
   const [loading, setLoading] = useState(true)
   const [adminUserId, setAdminUserId] = useState('')
@@ -235,6 +248,7 @@ export default function AdminPage() {
       if (!dbUser?.is_admin) { router.push('/dashboard'); return }
       setAdminUserId(dbUser.id)
       await Promise.all([loadData(), loadOvertimeEntries(), loadFlagData(), loadClockLogRecords(), loadAllLeaves()])
+      resyncAllBalances().then(() => loadData()).catch(() => {})
       setLoading(false)
     })
   }, [])
@@ -315,6 +329,7 @@ export default function AdminPage() {
       }
     }
 
+    await resyncUserBalances(leave.user_id)
     await loadData()
     setActing(null)
   }
@@ -489,6 +504,7 @@ export default function AdminPage() {
       }
     }
     await supabaseAdmin.from('leaves').delete().eq('id', id)
+    if (leave) await resyncUserBalances(leave.user_id)
     setDeletingLeaveId(null)
     await loadData()
   }
@@ -621,6 +637,7 @@ export default function AdminPage() {
         })
       }
     }
+    await resyncUserBalances(leave.user_id)
     setEditingLeaveStatusId(null)
     await Promise.all([loadAllLeaves(), loadData()])
     setLeaveEditSaving(false)
@@ -642,9 +659,58 @@ export default function AdminPage() {
       }
     }
     await supabaseAdmin.from('leaves').delete().eq('id', id)
+    await resyncUserBalances(userId)
     setDeletingLeaveLogId(null)
     setConfirmDeleteLeaveLogId(null)
     await Promise.all([loadAllLeaves(), loadData()])
+  }
+
+  async function resyncUserBalances(uid: string) {
+    const today = new Date().toISOString().split('T')[0]
+    const [{ data: balRows }, { data: approvedLeaves }] = await Promise.all([
+      supabaseAdmin.from('leave_balances').select('leave_type, allocated, year').eq('user_id', uid),
+      supabaseAdmin.from('leaves').select('type, value').eq('user_id', uid).eq('status', 'approved').lte('date_to', today),
+    ])
+    if (!balRows || balRows.length === 0) return
+    const sumMap: Record<string, number> = {}
+    for (const l of approvedLeaves ?? []) {
+      const key = (l as any).type === 'casual' ? 'earned' : (l as any).type
+      sumMap[key] = (sumMap[key] ?? 0) + ((l as any).value ?? 0)
+    }
+    for (const b of balRows as any[]) {
+      const newBal = b.allocated - (sumMap[b.leave_type] ?? 0)
+      await supabaseAdmin.from('leave_balances').delete().eq('user_id', uid).eq('leave_type', b.leave_type)
+      await supabaseAdmin.from('leave_balances').insert({
+        user_id: uid, leave_type: b.leave_type,
+        allocated: b.allocated, balance: newBal,
+        year: b.year ?? new Date().getFullYear(),
+      })
+    }
+  }
+
+  async function resyncAllBalances() {
+    const today = new Date().toISOString().split('T')[0]
+    const [{ data: balRows }, { data: allLeaves }] = await Promise.all([
+      supabaseAdmin.from('leave_balances').select('user_id, leave_type, allocated, year'),
+      supabaseAdmin.from('leaves').select('user_id, type, value').eq('status', 'approved').lte('date_to', today),
+    ])
+    if (!balRows || balRows.length === 0) return
+    const sumMap: Record<string, number> = {}
+    for (const l of allLeaves ?? []) {
+      const key = `${(l as any).user_id}|${(l as any).type === 'casual' ? 'earned' : (l as any).type}`
+      sumMap[key] = (sumMap[key] ?? 0) + ((l as any).value ?? 0)
+    }
+    const updates = (balRows as any[]).map(b => ({
+      user_id: b.user_id, leave_type: b.leave_type,
+      allocated: b.allocated,
+      balance: b.allocated - (sumMap[`${b.user_id}|${b.leave_type}`] ?? 0),
+      year: b.year ?? new Date().getFullYear(),
+    }))
+    if (updates.length > 0) {
+      const userIds = [...new Set(updates.map(u => u.user_id))]
+      await supabaseAdmin.from('leave_balances').delete().in('user_id', userIds)
+      await supabaseAdmin.from('leave_balances').insert(updates)
+    }
   }
 
   function computeFlags() {
@@ -1105,7 +1171,7 @@ export default function AdminPage() {
                       </span>
                     </div>
                     <p className="text-xs text-[#888]">
-                      {leave.type} leave · {leave.date_from}{leave.date_to !== leave.date_from ? ` → ${leave.date_to}` : ''} · {leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
+                      {labelForType(leave.type)} · {leave.date_from}{leave.date_to !== leave.date_from ? ` → ${leave.date_to}` : ''} · {leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
                     </p>
                     {leave.reason && <p className="text-xs text-[#bbb] mt-1 italic">{leave.reason}</p>}
                   </div>
@@ -1799,7 +1865,7 @@ export default function AdminPage() {
                       editingLeaveStatusId === leave.id ? (
                         <tr key={leave.id} className="bg-[#fafafa]">
                           <td className="px-4 py-3 text-xs text-[#1a1a1a]">{leave.users?.name || leave.users?.email || '—'}</td>
-                          <td className="px-4 py-3 text-xs text-[#888] capitalize">{leave.type}</td>
+                          <td className="px-4 py-3 text-xs text-[#888]">{labelForType(leave.type)}</td>
                           <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(leave.date_from)}</td>
                           <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(leave.date_to)}</td>
                           <td className="px-4 py-3 text-xs text-[#888]">{leave.value}</td>
@@ -1829,7 +1895,7 @@ export default function AdminPage() {
                       ) : (
                         <tr key={leave.id} className="hover:bg-[#fafafa]">
                           <td className="px-4 py-3 text-xs text-[#1a1a1a]">{leave.users?.name || leave.users?.email || '—'}</td>
-                          <td className="px-4 py-3 text-xs text-[#888] capitalize">{leave.type}</td>
+                          <td className="px-4 py-3 text-xs text-[#888]">{labelForType(leave.type)}</td>
                           <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(leave.date_from)}</td>
                           <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(leave.date_to)}</td>
                           <td className="px-4 py-3 text-xs text-[#888]">{leave.value}</td>

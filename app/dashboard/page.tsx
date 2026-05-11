@@ -45,6 +45,19 @@ const STATUS_STYLES: Record<string, string> = {
   cancelled: 'text-[#bbb] bg-[#f5f5f5]',
 }
 
+const LEAVE_LABEL_FALLBACKS: Record<string, string> = {
+  earned: 'Earned Leave',
+  casual: 'Earned Leave',
+  wfh: 'WFH',
+  sick: 'Sick Leave',
+  maternity: 'Maternity Leave',
+  miscarriage: 'Miscarriage Leave',
+  sabbatical: 'Sabbatical',
+}
+function labelForType(key: string): string {
+  return LEAVE_LABEL_FALLBACKS[key] ?? key
+}
+
 function toDateStr(d: Date) { return d.toISOString().split('T')[0] }
 function fmt(d: string) {
   return new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
@@ -201,7 +214,7 @@ export default function Dashboard() {
       .sort((a, b) => (typeLabelMap[a.leave_type]?.sort ?? 99) - (typeLabelMap[b.leave_type]?.sort ?? 99))
       .map((r) => ({
         key: r.leave_type,
-        label: typeLabelMap[r.leave_type]?.label ?? r.leave_type,
+        label: typeLabelMap[r.leave_type]?.label ?? LEAVE_LABEL_FALLBACKS[r.leave_type] ?? r.leave_type,
         allocated: r.allocated,
         balance: r.balance,
         taken: r.leave_type === 'earned' ? sumByType(pastApproved, 'earned', 'casual') : sumByType(pastApproved, r.leave_type),
@@ -264,24 +277,37 @@ export default function Dashboard() {
       const adminFlag = resolvedUser.is_admin === true
       setIsAdmin(adminFlag)
       await Promise.all([loadData(resolvedUser.id), loadClockData(resolvedUser.id, adminFlag)])
+      resyncUserBalance(resolvedUser.id).then(() => loadData(resolvedUser.id)).catch(() => {})
     })
   }, [])
 
-  async function cancelLeave(id: string) {
-    setSaving(true)
-    const leave = myLeaves.find(l => l.id === id)
-    await supabaseAdmin.from('leaves').update({ status: 'cancelled' }).eq('id', id).eq('user_id', userId)
-    if (leave?.status === 'approved') {
-      const { data: bal } = await supabaseAdmin
-        .from('leave_balances').select('balance, allocated')
-        .eq('user_id', userId).eq('leave_type', leave.type).maybeSingle()
-      await supabaseAdmin.from('leave_balances').upsert({
-        user_id: userId,
-        leave_type: leave.type,
-        allocated: bal?.allocated ?? 0,
-        balance: (bal?.balance ?? 0) + leave.value,
+  async function resyncUserBalance(uid: string) {
+    const today = new Date().toISOString().split('T')[0]
+    const [{ data: balRows }, { data: approvedLeaves }] = await Promise.all([
+      supabaseAdmin.from('leave_balances').select('leave_type, allocated, year').eq('user_id', uid),
+      supabaseAdmin.from('leaves').select('type, value').eq('user_id', uid).eq('status', 'approved').lte('date_to', today),
+    ])
+    if (!balRows || balRows.length === 0) return
+    const sumMap: Record<string, number> = {}
+    for (const l of approvedLeaves ?? []) {
+      const key = l.type === 'casual' ? 'earned' : l.type
+      sumMap[key] = (sumMap[key] ?? 0) + ((l as any).value ?? 0)
+    }
+    for (const b of balRows as any[]) {
+      const newBal = b.allocated - (sumMap[b.leave_type] ?? 0)
+      await supabaseAdmin.from('leave_balances').delete().eq('user_id', uid).eq('leave_type', b.leave_type)
+      await supabaseAdmin.from('leave_balances').insert({
+        user_id: uid, leave_type: b.leave_type,
+        allocated: b.allocated, balance: newBal,
+        year: b.year ?? new Date().getFullYear(),
       })
     }
+  }
+
+  async function cancelLeave(id: string) {
+    setSaving(true)
+    await supabaseAdmin.from('leaves').update({ status: 'cancelled' }).eq('id', id).eq('user_id', userId)
+    await resyncUserBalance(userId)
     await loadData(userId)
     setSaving(false)
   }
@@ -521,7 +547,7 @@ export default function Dashboard() {
                     ) : (
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-xs text-[#1a1a1a] capitalize">{leave.type} leave</p>
+                          <p className="text-xs text-[#1a1a1a]">{labelForType(leave.type)}</p>
                           <p className="text-[10px] text-[#aaa] mt-0.5">
                             {fmt(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmt(leave.date_to)}` : ''}
                             {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value}d`}
