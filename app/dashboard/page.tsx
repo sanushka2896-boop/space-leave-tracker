@@ -320,6 +320,10 @@ export default function Dashboard() {
   if (!user) return null
 
   const nextReview = reviews2026.find(r => r.date >= getISTNow().date)
+  const reviewDaysAway = nextReview
+    ? Math.ceil((new Date(nextReview.date + 'T00:00:00').getTime() - new Date().getTime()) / 86400000)
+    : null
+  const showReviewStrip = reviewDaysAway !== null && reviewDaysAway >= 0 && reviewDaysAway <= 30
 
   return (
     <main className="min-h-screen bg-[#F5F2EE]">
@@ -327,46 +331,158 @@ export default function Dashboard() {
 
       <div className="px-12 py-12 max-w-5xl mx-auto">
 
+        {/* Review strip — only within 30 days */}
+        {showReviewStrip && nextReview && (
+          <div className="mb-6 px-5 py-3 border border-[#e8e4de] bg-[#fafaf8] flex items-center justify-between">
+            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa]">
+              {nextReview.notes || (nextReview.type === 'bi-annual' ? 'Bi-Annual Review' : 'Annual Review')}
+              {' — '}
+              {new Date(nextReview.date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}
+            </p>
+            <span className="text-[9px] tracking-[0.2em] uppercase text-[#bbb]">{daysUntil(nextReview.date)}</span>
+          </div>
+        )}
+
         {/* Header */}
-        <div className="mb-10">
-          <p className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Dashboard</p>
-          <p className="text-2xl font-light tracking-wide text-[#1a1a1a]">
+        <div className="mb-8">
+          <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-2">Welcome Back</p>
+          <p className="text-[#1a1a1a] leading-tight" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '28px', fontWeight: 300 }}>
             {user.user_metadata?.full_name || user.email}
           </p>
         </div>
 
-        {/* TOP ROW: Leave Balance | Upcoming Leaves */}
-        <div className="grid grid-cols-2 gap-6 mb-6">
+        {/* Quick Actions strip */}
+        <div className="flex gap-3 mb-8">
+          <button onClick={() => router.push('/apply')}
+            className="flex-1 py-3 border border-[#1a1a1a] text-[11px] tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all duration-300 cursor-pointer">
+            Apply for Leave
+          </button>
+          <button onClick={() => router.push('/attendance?tab=overtime')}
+            className="flex-1 py-3 border border-[#ddd] text-[11px] tracking-[0.25em] uppercase text-[#888] hover:border-[#1a1a1a] hover:text-[#1a1a1a] transition-all duration-300 cursor-pointer">
+            Log Overtime
+          </button>
+          <button onClick={() => router.push('/apply?type=wfh')}
+            className="flex-1 py-3 border border-[#ddd] text-[11px] tracking-[0.25em] uppercase text-[#888] hover:border-[#1a1a1a] hover:text-[#1a1a1a] transition-all duration-300 cursor-pointer">
+            Apply for WFH
+          </button>
+        </div>
 
-          {/* Left: Leave Balance table */}
-          <div className="border border-[#ddd] bg-white p-6">
-            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Leave Balance</p>
-            {balances.length === 0 ? (
-              <p className="text-xs text-[#bbb] tracking-wider">No balance data.</p>
+        {/* Leave Balance table */}
+        <div className="border border-[#ddd] bg-white p-6 mb-6">
+          <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Leave Balance</p>
+          {balances.length === 0 ? (
+            <p className="text-xs text-[#bbb] tracking-wider">No balance data.</p>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-[#eee]">
+                  {['Leave Type', 'Allocated', 'Taken', 'Remaining'].map(h => (
+                    <th key={h} className="pb-2 text-left text-[9px] tracking-[0.3em] uppercase text-[#888] font-normal pr-6">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f5f5f5]">
+                {balances.map(b => (
+                  <tr key={b.key}>
+                    <td className="py-3 pr-6 text-[11px] text-[#1a1a1a]">{b.label}</td>
+                    <td className="py-3 pr-6 text-[#888]" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 300 }}>{b.allocated}</td>
+                    <td className="py-3 pr-6 text-[#888]" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '18px', fontWeight: 300 }}>{b.taken}</td>
+                    <td className={`py-3 ${b.balance < 0 ? 'text-red-500' : 'text-[#1a1a1a]'}`}
+                      style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '24px', fontWeight: (b.balance < 5 && b.balance >= 0) ? 500 : 300 }}>
+                      {b.balance}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Today's Attendance — full width */}
+        <div className="mb-6">
+          <div className="border border-[#ddd] bg-white px-8 py-6 flex items-center justify-between">
+            <div>
+              <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-3">Today's Attendance</p>
+              {todayClock?.clock_in_time ? (
+                <div className="flex items-center gap-5">
+                  <span className="text-[#1a1a1a]" style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: '20px', fontWeight: 300 }}>
+                    {fmtTime(todayClock.clock_in_time)}
+                  </span>
+                  {todayClock.clock_in_time > '10:15' ? (
+                    <span className="text-[9px] uppercase tracking-[0.25em] px-3 py-1 bg-amber-50 text-amber-600 border border-amber-200">
+                      Late · +{minutesDiff('10:00', todayClock.clock_in_time)}m
+                    </span>
+                  ) : (
+                    <span className="text-[9px] uppercase tracking-[0.25em] px-3 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200">
+                      On Time
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm font-light text-[#bbb]">Not clocked in yet</p>
+              )}
+              {clockError && <p className="text-xs text-red-400 mt-2">{clockError}</p>}
+            </div>
+            {todayClock?.clock_in_time ? (
+              <button onClick={() => deleteClockIn(userId, isAdmin)} disabled={clockAction}
+                className="px-6 py-2.5 border border-red-400 text-[11px] tracking-[0.2em] uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-30">
+                {clockAction ? '…' : 'Delete'}
+              </button>
             ) : (
+              <button onClick={() => clockIn(userId, isAdmin)} disabled={clockAction}
+                className="px-6 py-2.5 border border-emerald-600 text-[11px] tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30">
+                {clockAction ? '…' : 'Clock In'}
+              </button>
+            )}
+          </div>
+
+          {allClockLogs.length > 0 && (
+            <div className="border border-[#ddd] border-t-0 bg-white overflow-hidden">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-[#eee]">
-                    {['Type', 'Allocated', 'Taken', 'Remaining'].map(h => (
-                      <th key={h} className="pb-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#ccc] font-normal pr-4">{h}</th>
+                    {['Employee', 'Clock In', 'Status', ...(isAdmin ? [''] : [])].map(h => (
+                      <th key={h} className="px-6 py-2 text-left text-[9px] tracking-[0.3em] uppercase text-[#888] font-normal">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f5f5f5]">
-                  {balances.map(b => (
-                    <tr key={b.key}>
-                      <td className="py-2.5 text-xs text-[#1a1a1a] pr-4">{b.label}</td>
-                      <td className="py-2.5 text-xs text-[#888] pr-4">{b.allocated}</td>
-                      <td className="py-2.5 text-xs text-[#888] pr-4">{b.taken}</td>
-                      <td className={`py-2.5 text-xs font-medium ${b.balance < 0 ? 'text-red-500' : 'text-[#1a1a1a]'}`}>{b.balance}</td>
-                    </tr>
-                  ))}
+                  {allClockLogs.map(log => {
+                    const late = log.clock_in_time && log.clock_in_time > '10:15'
+                    return (
+                      <tr key={log.id} className="hover:bg-[#fafafa]">
+                        <td className="px-6 py-3 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>
+                        <td className={`px-6 py-3 text-xs ${late ? 'text-amber-600' : 'text-[#888]'}`}>{fmtTime(log.clock_in_time)}</td>
+                        <td className="px-6 py-3">
+                          {!log.clock_in_time ? (
+                            <span className="text-[9px] uppercase tracking-wider text-[#ccc]">Not clocked in</span>
+                          ) : late ? (
+                            <span className="text-[9px] uppercase tracking-wider text-amber-600">Late {minutesDiff('10:00', log.clock_in_time!)}m</span>
+                          ) : (
+                            <span className="text-[9px] uppercase tracking-wider text-emerald-600">On time</span>
+                          )}
+                        </td>
+                        {isAdmin && (
+                          <td className="px-6 py-3">
+                            <button onClick={() => deleteAnyClockIn(log.id)} disabled={clockAction}
+                              className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-30">
+                              Delete
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
-            )}
-          </div>
+            </div>
+          )}
+        </div>
 
-          {/* Right: Upcoming Leaves (next 3) */}
+        {/* Two columns: Upcoming Leaves | Team Availability */}
+        <div className="grid grid-cols-2 gap-6 mb-14">
+
+          {/* Upcoming Leaves */}
           <div className="border border-[#ddd] bg-white p-6">
             <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Upcoming Leaves</p>
             {myLeaves.length === 0 ? (
@@ -432,151 +548,21 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-        </div>
 
-        {/* MIDDLE ROW: Today's Attendance */}
-        <div className="mb-6">
-          <div className="border border-[#ddd] bg-white px-8 py-5 flex items-center justify-between">
-            <div>
-              <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-2">Today's Attendance</p>
-              {todayClock?.clock_in_time ? (
-                <div className="flex items-center gap-8">
-                  <div>
-                    <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock In</span>
-                    <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock.clock_in_time)}</p>
-                  </div>
-                  {todayClock.clock_in_time > '10:15' ? (
-                    <div>
-                      <span className="text-[9px] text-amber-600 uppercase tracking-wider">Late</span>
-                      <p className="text-sm font-light text-amber-600 mt-0.5">
-                        +{minutesDiff('10:00', todayClock.clock_in_time)}m
-                      </p>
-                    </div>
-                  ) : (
-                    <div>
-                      <span className="text-[9px] text-emerald-600 uppercase tracking-wider">On Time</span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm font-light text-[#bbb] mt-0.5">Not clocked in yet</p>
-              )}
-              {clockError && <p className="text-xs text-red-400 mt-2">{clockError}</p>}
-            </div>
-            {todayClock?.clock_in_time ? (
-              <button onClick={() => deleteClockIn(userId, isAdmin)} disabled={clockAction}
-                className="px-6 py-2.5 border border-red-400 text-xs tracking-[0.2em] uppercase text-red-400 hover:bg-red-400 hover:text-white transition-all cursor-pointer disabled:opacity-30">
-                {clockAction ? '…' : 'Delete'}
-              </button>
-            ) : (
-              <button onClick={() => clockIn(userId, isAdmin)} disabled={clockAction}
-                className="px-6 py-2.5 border border-emerald-600 text-xs tracking-[0.2em] uppercase text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all cursor-pointer disabled:opacity-30">
-                {clockAction ? '…' : 'Clock In'}
-              </button>
-            )}
-          </div>
-
-          {allClockLogs.length > 0 && (
-            <div className="border border-[#ddd] border-t-0 bg-white overflow-hidden">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-[#eee]">
-                    {['Employee', 'Clock In', 'Status', ...(isAdmin ? [''] : [])].map(h => (
-                      <th key={h} className="px-6 py-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#f5f5f5]">
-                  {allClockLogs.map(log => {
-                    const late = log.clock_in_time && log.clock_in_time > '10:15'
-                    return (
-                      <tr key={log.id} className="hover:bg-[#fafafa]">
-                        <td className="px-6 py-3 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>
-                        <td className={`px-6 py-3 text-xs ${late ? 'text-amber-600' : 'text-[#888]'}`}>{fmtTime(log.clock_in_time)}</td>
-                        <td className="px-6 py-3">
-                          {!log.clock_in_time ? (
-                            <span className="text-[9px] uppercase tracking-wider text-[#ccc]">Not clocked in</span>
-                          ) : late ? (
-                            <span className="text-[9px] uppercase tracking-wider text-amber-600">Late {minutesDiff('10:00', log.clock_in_time!)}m</span>
-                          ) : (
-                            <span className="text-[9px] uppercase tracking-wider text-emerald-600">On time</span>
-                          )}
-                        </td>
-                        {isAdmin && (
-                          <td className="px-6 py-3">
-                            <button onClick={() => deleteAnyClockIn(log.id)} disabled={clockAction}
-                              className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-30">
-                              Delete
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* BOTTOM ROW: Quick Actions | Next Review */}
-        <div className="grid grid-cols-2 gap-6 mb-14">
-
-          {/* Left: Quick Actions */}
+          {/* Team Availability */}
           <div className="border border-[#ddd] bg-white p-6">
-            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Quick Actions</p>
-            <div className="space-y-3">
-              <button
-                onClick={() => router.push('/apply')}
-                className="w-full py-3 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all duration-300 cursor-pointer"
-              >
-                Apply for Leave
-              </button>
-              <button
-                onClick={() => router.push('/attendance')}
-                className="w-full py-3 border border-[#ddd] text-xs tracking-[0.25em] uppercase text-[#888] hover:border-[#1a1a1a] hover:text-[#1a1a1a] transition-all duration-300 cursor-pointer"
-              >
-                Log Overtime
-              </button>
-            </div>
-          </div>
-
-          {/* Right: Next Review Date */}
-          <div className="border border-[#ddd] bg-white p-6">
-            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Next Review</p>
-            {!nextReview ? (
-              <p className="text-xs text-[#bbb] tracking-wider">No upcoming reviews scheduled.</p>
-            ) : (
-              <div>
-                <p className="text-xs font-light text-[#1a1a1a]">
-                  {nextReview.notes || (nextReview.type === 'bi-annual' ? 'Bi-Annual Review' : 'Annual Review')}
-                </p>
-                <p className="text-[10px] text-[#aaa] mt-1">
-                  {new Date(nextReview.date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
-                </p>
-                <span className="text-[9px] tracking-[0.2em] uppercase text-[#888] border border-[#ddd] px-3 py-1 mt-3 inline-block">
-                  {daysUntil(nextReview.date)}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Team Availability */}
-        <div className="mb-14">
-          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-5">Team Availability</h3>
-          <div className="grid grid-cols-3 gap-6">
+            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Team Availability</p>
             {([
               { label: 'Today',     people: teamAvail.today },
               { label: 'Tomorrow',  people: teamAvail.tomorrow },
               { label: 'Next Week', people: teamAvail.nextWeek },
             ] as const).map(({ label, people }) => (
-              <div key={label} className="border border-[#ddd] bg-white p-5">
-                <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-3">{label}</p>
+              <div key={label} className="mb-4 last:mb-0">
+                <p className="text-[9px] tracking-[0.2em] uppercase text-[#ccc] mb-2">{label}</p>
                 {people.length === 0 ? (
-                  <p className="text-xs text-emerald-600 tracking-wider">Everyone in</p>
+                  <p className="text-xs text-emerald-600">Everyone in</p>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     {people.map((p, i) => (
                       <div key={i} className="flex items-center justify-between">
                         <p className="text-xs text-[#1a1a1a] truncate pr-2">{p.name}</p>
@@ -592,16 +578,18 @@ export default function Dashboard() {
 
         {/* Upcoming Holidays */}
         {holidays.length > 0 && (
-          <div className="mb-14">
-            <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-5">Upcoming Holidays</h3>
-            <div className="grid grid-cols-3 gap-6">
+          <div className="mb-8">
+            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-3">Upcoming Holidays</p>
+            <div className="border border-[#ddd] bg-white divide-y divide-[#f5f5f5]">
               {holidays.map(h => (
-                <div key={h.id} className="border border-[#ddd] bg-white p-5">
-                  <p className="text-xs tracking-[0.1em] text-[#1a1a1a] mb-1">{h.name}</p>
-                  <p className="text-[10px] text-[#aaa]">
-                    {new Date(h.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
-                  </p>
-                  <p className="text-[9px] text-amber-600 tracking-[0.2em] uppercase mt-3">{daysUntil(h.date)}</p>
+                <div key={h.id} className="px-5 py-3 flex items-center justify-between">
+                  <p className="text-xs text-[#1a1a1a]">{h.name}</p>
+                  <div className="flex items-center gap-4">
+                    <p className="text-[10px] text-[#aaa]">
+                      {new Date(h.date + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}
+                    </p>
+                    <span className="text-[9px] text-amber-600 tracking-[0.2em] uppercase">{daysUntil(h.date)}</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -610,8 +598,8 @@ export default function Dashboard() {
 
         {/* Working Saturdays */}
         <div className="mb-6">
-          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-5">Working Saturdays</h3>
-          <div className="grid grid-cols-2 gap-8">
+          <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-3">Working Saturdays</p>
+          <div className="grid grid-cols-2 gap-6">
             <div className="border border-[#ddd] bg-white p-5 space-y-3">
               <p className="text-[9px] tracking-[0.25em] uppercase text-[#aaa]">Company-Wide</p>
               {workingSats.company.length === 0 ? (

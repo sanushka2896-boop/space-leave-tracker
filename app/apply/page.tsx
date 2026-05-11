@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase, supabaseAdmin } from '../lib/supabase'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import Nav from '../components/Nav'
 import type { LeaveTypeDef } from '../lib/leaveTypes'
@@ -42,6 +42,7 @@ export default function ApplyLeave() {
   const [submitting, setSubmitting] = useState(false)
   const [userDOJ, setUserDOJ] = useState<string | null>(null)
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -70,7 +71,11 @@ export default function ApplyLeave() {
       }) as LeaveTypeDef[]
 
       setLeaveTypes(filtered)
-      setForm(f => ({ ...f, type: filtered[0]?.key ?? 'earned' }))
+      const typeParam = searchParams.get('type')
+      const initialType = (typeParam && filtered.some((t: LeaveTypeDef) => t.key === typeParam))
+        ? typeParam
+        : filtered[0]?.key ?? 'earned'
+      setForm(f => ({ ...f, type: initialType }))
 
       const balMap: Record<string, number> = {}
       for (const r of balRows ?? []) balMap[(r as any).leave_type] = (r as any).balance

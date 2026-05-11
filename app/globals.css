@@ -8,7 +8,7 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: 'Hoefler Text', Georgia, serif;
+  --font-sans: 'Jost', sans-serif;
   --font-mono: 'Courier New', monospace;
 }
 
@@ -22,16 +22,16 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: 'Hoefler Text', 'Georgia', serif;
+  font-family: 'Jost', sans-serif;
+  font-weight: 300;
 }
 
-h1, h2, h3, h4, h5, h6 {
-  font-family: 'Bodoni 72 Smallcaps', 'Bodoni MT', 'Didot', 'Big Caslon', serif;
+h1, h2, h3, h4, h5, h6, .serif {
+  font-family: 'Cormorant Garamond', serif;
 }
 
-nav, button, input, select, textarea, label,
-.font-sans {
-  font-family: 'Optician Sans', 'Futura', 'Century Gothic', 'Trebuchet MS', sans-serif;
+button, input, select, textarea {
+  font-family: 'Jost', sans-serif;
 }
 
 /* ── Light mode: enforce readable text everywhere ── */
