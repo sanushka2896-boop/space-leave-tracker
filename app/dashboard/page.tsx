@@ -184,9 +184,9 @@ export default function Dashboard() {
     for (const lt of ltDefs ?? []) typeLabelMap[lt.key] = { label: lt.label, sort: lt.sort_order }
 
     const leaves = allMyLeaves ?? []
-    const pastApproved = leaves.filter((l: any) => l.status === 'approved' && l.date_to < todayStr)
-    const futureApproved = leaves.filter((l: any) => l.status === 'approved' && l.date_from >= todayStr)
-    const sumByType = (arr: any[], ...types: string[]) => arr.filter(l => types.includes(l.type)).reduce((s: number, l: any) => s + l.value, 0)
+    const allApproved = leaves.filter((l: any) => l.status === 'approved')
+    const futureApproved = leaves.filter((l: any) => l.status === 'approved' && l.date_from > todayStr)
+    const sumByType = (arr: any[], ...types: string[]) => arr.filter(l => types.includes(l.type)).reduce((s: number, l: any) => s + parseFloat(l.value), 0)
 
     // Track which mat/mis types have an approved record
     const approvedMatOrMis = new Set(
@@ -212,14 +212,19 @@ export default function Dashboard() {
         return true
       })
       .sort((a, b) => (typeLabelMap[a.leave_type]?.sort ?? 99) - (typeLabelMap[b.leave_type]?.sort ?? 99))
-      .map((r) => ({
-        key: r.leave_type,
-        label: typeLabelMap[r.leave_type]?.label ?? LEAVE_LABEL_FALLBACKS[r.leave_type] ?? r.leave_type,
-        allocated: r.allocated,
-        balance: r.balance,
-        taken: r.leave_type === 'earned' ? sumByType(pastApproved, 'earned', 'casual') : sumByType(pastApproved, r.leave_type),
-        scheduled: r.leave_type === 'earned' ? sumByType(futureApproved, 'earned', 'casual') : sumByType(futureApproved, r.leave_type),
-      }))
+      .map((r) => {
+        const taken = r.leave_type === 'earned'
+          ? sumByType(allApproved, 'earned', 'casual')
+          : sumByType(allApproved, r.leave_type)
+        return {
+          key: r.leave_type,
+          label: typeLabelMap[r.leave_type]?.label ?? LEAVE_LABEL_FALLBACKS[r.leave_type] ?? r.leave_type,
+          allocated: r.allocated,
+          balance: r.allocated - taken,
+          taken,
+          scheduled: r.leave_type === 'earned' ? sumByType(futureApproved, 'earned', 'casual') : sumByType(futureApproved, r.leave_type),
+        }
+      })
 
     setBalances(balanceItems)
     setMyLeaves(leaves.filter((l: any) => {
@@ -285,13 +290,13 @@ export default function Dashboard() {
     const today = new Date().toISOString().split('T')[0]
     const [{ data: balRows }, { data: approvedLeaves }] = await Promise.all([
       supabaseAdmin.from('leave_balances').select('leave_type, allocated, year').eq('user_id', uid),
-      supabaseAdmin.from('leaves').select('type, value').eq('user_id', uid).eq('status', 'approved').lte('date_to', today),
+      supabaseAdmin.from('leaves').select('type, value').eq('user_id', uid).eq('status', 'approved'),
     ])
     if (!balRows || balRows.length === 0) return
     const sumMap: Record<string, number> = {}
     for (const l of approvedLeaves ?? []) {
       const key = l.type === 'casual' ? 'earned' : l.type
-      sumMap[key] = (sumMap[key] ?? 0) + ((l as any).value ?? 0)
+      sumMap[key] = (sumMap[key] ?? 0) + parseFloat((l as any).value ?? 0)
     }
     for (const b of balRows as any[]) {
       const newBal = b.allocated - (sumMap[b.leave_type] ?? 0)

@@ -154,44 +154,40 @@ export default function ProfilePage() {
     return count
   }
 
+  async function resyncUserBalance(uid: string) {
+    const [{ data: balRows }, { data: approvedLeaves }] = await Promise.all([
+      supabaseAdmin.from('leave_balances').select('leave_type, allocated, year').eq('user_id', uid),
+      supabaseAdmin.from('leaves').select('type, value').eq('user_id', uid).eq('status', 'approved'),
+    ])
+    if (!balRows || balRows.length === 0) return
+    const sumMap: Record<string, number> = {}
+    for (const l of approvedLeaves ?? []) {
+      const key = (l as any).type === 'casual' ? 'earned' : (l as any).type
+      sumMap[key] = (sumMap[key] ?? 0) + parseFloat((l as any).value ?? 0)
+    }
+    for (const b of balRows as any[]) {
+      const newBal = b.allocated - (sumMap[b.leave_type] ?? 0)
+      await supabaseAdmin.from('leave_balances').delete().eq('user_id', uid).eq('leave_type', b.leave_type)
+      await supabaseAdmin.from('leave_balances').insert({
+        user_id: uid, leave_type: b.leave_type,
+        allocated: b.allocated, balance: newBal,
+        year: b.year ?? new Date().getFullYear(),
+      })
+    }
+  }
+
   async function cancelLeave(id: string) {
     setCancellingId(id)
-    const leave = allLeaves.find(l => l.id === id)
     await supabaseAdmin.from('leaves').update({ status: 'cancelled' }).eq('id', id).eq('user_id', userId)
-    if (leave?.status === 'approved') {
-      const { data: bal } = await supabaseAdmin
-        .from('leave_balances').select('balance, allocated')
-        .eq('user_id', userId).eq('leave_type', leave.type).maybeSingle()
-      if (bal) {
-        await supabaseAdmin.from('leave_balances').upsert({
-          user_id: userId,
-          leave_type: leave.type,
-          allocated: bal.allocated,
-          balance: bal.balance + leave.value,
-        })
-      }
-    }
+    await resyncUserBalance(userId)
     await loadLeaves(userId)
     setCancellingId(null)
   }
 
   async function deleteLeave(id: string) {
     setDeletingId(id)
-    const leave = allLeaves.find(l => l.id === id)
-    if (leave?.status === 'approved' && leave.type === 'sick') {
-      const { data: bal } = await supabaseAdmin
-        .from('leave_balances').select('balance, allocated')
-        .eq('user_id', userId).eq('leave_type', 'sick').maybeSingle()
-      if (bal) {
-        await supabaseAdmin.from('leave_balances').upsert({
-          user_id: userId,
-          leave_type: 'sick',
-          allocated: bal.allocated,
-          balance: bal.balance + leave.value,
-        })
-      }
-    }
     await supabaseAdmin.from('leaves').delete().eq('id', id).eq('user_id', userId)
+    await resyncUserBalance(userId)
     await loadLeaves(userId)
     setDeletingId(null)
   }

@@ -669,13 +669,13 @@ export default function AdminPage() {
     const today = new Date().toISOString().split('T')[0]
     const [{ data: balRows }, { data: approvedLeaves }] = await Promise.all([
       supabaseAdmin.from('leave_balances').select('leave_type, allocated, year').eq('user_id', uid),
-      supabaseAdmin.from('leaves').select('type, value').eq('user_id', uid).eq('status', 'approved').lte('date_to', today),
+      supabaseAdmin.from('leaves').select('type, value').eq('user_id', uid).eq('status', 'approved'),
     ])
     if (!balRows || balRows.length === 0) return
     const sumMap: Record<string, number> = {}
     for (const l of approvedLeaves ?? []) {
       const key = (l as any).type === 'casual' ? 'earned' : (l as any).type
-      sumMap[key] = (sumMap[key] ?? 0) + ((l as any).value ?? 0)
+      sumMap[key] = (sumMap[key] ?? 0) + parseFloat((l as any).value ?? 0)
     }
     for (const b of balRows as any[]) {
       const newBal = b.allocated - (sumMap[b.leave_type] ?? 0)
@@ -692,13 +692,13 @@ export default function AdminPage() {
     const today = new Date().toISOString().split('T')[0]
     const [{ data: balRows }, { data: allLeaves }] = await Promise.all([
       supabaseAdmin.from('leave_balances').select('user_id, leave_type, allocated, year'),
-      supabaseAdmin.from('leaves').select('user_id, type, value').eq('status', 'approved').lte('date_to', today),
+      supabaseAdmin.from('leaves').select('user_id, type, value').eq('status', 'approved'),
     ])
     if (!balRows || balRows.length === 0) return
     const sumMap: Record<string, number> = {}
     for (const l of allLeaves ?? []) {
       const key = `${(l as any).user_id}|${(l as any).type === 'casual' ? 'earned' : (l as any).type}`
-      sumMap[key] = (sumMap[key] ?? 0) + ((l as any).value ?? 0)
+      sumMap[key] = (sumMap[key] ?? 0) + parseFloat((l as any).value ?? 0)
     }
     const updates = (balRows as any[]).map(b => ({
       user_id: b.user_id, leave_type: b.leave_type,
