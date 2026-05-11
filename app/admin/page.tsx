@@ -60,6 +60,14 @@ type OvertimeEntry = {
   users?: { name: string; email: string } | null
 }
 
+type ClockLogRecord = {
+  id: string
+  user_id: string
+  date: string
+  clock_in_time: string | null
+  users?: { name: string } | null
+}
+
 const STATUS_STYLES: Record<string, string> = {
   pending: 'text-amber-600 bg-amber-50',
   approved: 'text-emerald-600 bg-emerald-50',
@@ -145,6 +153,21 @@ export default function AdminPage() {
   const [retroRunning, setRetroRunning] = useState(false)
   const [retroResult, setRetroResult] = useState('')
 
+  // Records section
+  const [recordsTab, setRecordsTab] = useState<'clock' | 'leave'>('clock')
+  const [clockLogs, setClockLogs] = useState<ClockLogRecord[]>([])
+  const [allLeaves, setAllLeaves] = useState<Leave[]>([])
+  const [editingClockId, setEditingClockId] = useState<string | null>(null)
+  const [clockEditTime, setClockEditTime] = useState('')
+  const [clockEditSaving, setClockEditSaving] = useState(false)
+  const [confirmDeleteClockId, setConfirmDeleteClockId] = useState<string | null>(null)
+  const [deletingClockId, setDeletingClockId] = useState<string | null>(null)
+  const [editingLeaveStatusId, setEditingLeaveStatusId] = useState<string | null>(null)
+  const [leaveEditStatus, setLeaveEditStatus] = useState('')
+  const [leaveEditSaving, setLeaveEditSaving] = useState(false)
+  const [confirmDeleteLeaveLogId, setConfirmDeleteLeaveLogId] = useState<string | null>(null)
+  const [deletingLeaveLogId, setDeletingLeaveLogId] = useState<string | null>(null)
+
   const router = useRouter()
 
   async function loadOvertimeEntries() {
@@ -211,7 +234,7 @@ export default function AdminPage() {
         .from('users').select('id, is_admin').eq('email', session.user.email).single()
       if (!dbUser?.is_admin) { router.push('/dashboard'); return }
       setAdminUserId(dbUser.id)
-      await Promise.all([loadData(), loadOvertimeEntries(), loadFlagData()])
+      await Promise.all([loadData(), loadOvertimeEntries(), loadFlagData(), loadClockLogRecords(), loadAllLeaves()])
       setLoading(false)
     })
   }, [])
@@ -527,6 +550,103 @@ export default function AdminPage() {
     setAttendanceDeductions((deds ?? []) as typeof attendanceDeductions)
   }
 
+  async function loadClockLogRecords() {
+    const { data } = await supabaseAdmin
+      .from('clock_logs').select('*, users(name)').order('date', { ascending: false })
+    setClockLogs((data ?? []) as ClockLogRecord[])
+  }
+
+  async function loadAllLeaves() {
+    const { data } = await supabaseAdmin
+      .from('leaves').select('*, users(name, email)').order('date_from', { ascending: false })
+    const userMap: Record<string, { name: string; email: string }> = {}
+    for (const l of data ?? []) {
+      if ((l as any).users) userMap[(l as any).user_id] = (l as any).users
+    }
+    setAllLeaves((data ?? []).map((l: any) => ({ ...l, users: l.users ?? null })) as Leave[])
+  }
+
+  async function saveClockEdit(log: ClockLogRecord) {
+    setClockEditSaving(true)
+    const newTime = clockEditTime
+    await supabaseAdmin.from('clock_logs').update({ clock_in_time: newTime }).eq('id', log.id)
+    const isLate = newTime > '10:15'
+    if (isLate) {
+      const [h, m] = newTime.split(':').map(Number)
+      const minsLate = Math.max(0, h * 60 + m - 10 * 60)
+      const { data: existing } = await supabaseAdmin
+        .from('late_arrivals').select('id').eq('user_id', log.user_id).eq('date', log.date).maybeSingle()
+      if (existing) {
+        await supabaseAdmin.from('late_arrivals').update({ arrival_time: newTime, minutes_late: minsLate }).eq('id', existing.id)
+      } else {
+        await supabaseAdmin.from('late_arrivals').insert({
+          user_id: log.user_id, date: log.date, arrival_time: newTime,
+          minutes_late: minsLate, pto_deduction_status: 'Pending', approved: false,
+        })
+      }
+    } else {
+      await supabaseAdmin.from('late_arrivals').delete().eq('user_id', log.user_id).eq('date', log.date)
+    }
+    setEditingClockId(null)
+    await Promise.all([loadClockLogRecords(), loadFlagData()])
+    setClockEditSaving(false)
+  }
+
+  async function deleteClockLogRecord(id: string) {
+    setDeletingClockId(id)
+    await supabaseAdmin.from('clock_logs').delete().eq('id', id)
+    setDeletingClockId(null)
+    setConfirmDeleteClockId(null)
+    await loadClockLogRecords()
+  }
+
+  async function saveLeaveStatus(leave: Leave) {
+    setLeaveEditSaving(true)
+    const oldStatus = leave.status
+    const newStatus = leaveEditStatus
+    await supabaseAdmin.from('leaves').update({ status: newStatus }).eq('id', leave.id)
+    if (oldStatus !== newStatus) {
+      const { data: balRows } = await supabaseAdmin
+        .from('leave_balances').select('balance, allocated')
+        .eq('user_id', leave.user_id).eq('leave_type', leave.type)
+      const bal = (balRows ?? [])[0] ?? null
+      if (bal) {
+        await supabaseAdmin.from('leave_balances').delete().eq('user_id', leave.user_id).eq('leave_type', leave.type)
+        let newBal = bal.balance
+        if (oldStatus === 'approved' && newStatus !== 'approved') newBal = bal.balance + leave.value
+        else if (oldStatus !== 'approved' && newStatus === 'approved') newBal = bal.balance - leave.value
+        await supabaseAdmin.from('leave_balances').insert({
+          user_id: leave.user_id, leave_type: leave.type,
+          allocated: bal.allocated, balance: newBal, year: new Date().getFullYear(),
+        })
+      }
+    }
+    setEditingLeaveStatusId(null)
+    await Promise.all([loadAllLeaves(), loadData()])
+    setLeaveEditSaving(false)
+  }
+
+  async function deleteLeaveLog(id: string, status: string, userId: string, type: string, value: number) {
+    setDeletingLeaveLogId(id)
+    if (status === 'approved') {
+      const { data: balRows } = await supabaseAdmin
+        .from('leave_balances').select('balance, allocated')
+        .eq('user_id', userId).eq('leave_type', type)
+      const bal = (balRows ?? [])[0] ?? null
+      if (bal) {
+        await supabaseAdmin.from('leave_balances').delete().eq('user_id', userId).eq('leave_type', type)
+        await supabaseAdmin.from('leave_balances').insert({
+          user_id: userId, leave_type: type,
+          allocated: bal.allocated, balance: bal.balance + value, year: new Date().getFullYear(),
+        })
+      }
+    }
+    await supabaseAdmin.from('leaves').delete().eq('id', id)
+    setDeletingLeaveLogId(null)
+    setConfirmDeleteLeaveLogId(null)
+    await Promise.all([loadAllLeaves(), loadData()])
+  }
+
   function computeFlags() {
     const todayStr = new Date().toISOString().split('T')[0]
     const todayYM = todayStr.slice(0, 7)
@@ -544,16 +664,21 @@ export default function AdminPage() {
       otByMonth[k] = (otByMonth[k] ?? 0) + parseOTDurationLocal(e.overtime_duration)
     }
 
-    const flags: { userId: string; name: string; month: string; flagType: string; amount: number; deductDays: number }[] = []
+    const flags: { userId: string; name: string; month: string; flagType: string; amount: number; deductDays: number; canDeduct: boolean }[] = []
     for (const [k, d] of Object.entries(lateByMonth)) {
       const [userId, month] = k.split('|')
-      const canFlag = month < todayYM || (month === todayYM && todayDay >= 25)
-      if (!canFlag) continue
-      const resolved = attendanceDeductions.some(x => x.user_id === userId && x.month === month && (x.flag_type === 'full_day' || x.flag_type === 'half_day'))
+      const resolved = attendanceDeductions.some(x => x.user_id === userId && x.month === month && ['full_day', 'half_day', 'multi_day'].includes(x.flag_type))
       if (resolved) continue
       const netLate = d.mins - (otByMonth[k] ?? 0)
-      if (netLate >= 480) flags.push({ userId, name: d.name, month, flagType: 'full_day', amount: netLate, deductDays: 1 })
-      else if (netLate >= 240) flags.push({ userId, name: d.name, month, flagType: 'half_day', amount: netLate, deductDays: 0.5 })
+      const canDeduct = month < todayYM || (month === todayYM && todayDay >= 25)
+      if (netLate >= 960) {
+        const days = Math.floor(netLate / 480)
+        flags.push({ userId, name: d.name, month, flagType: 'multi_day', amount: netLate, deductDays: days, canDeduct })
+      } else if (netLate >= 480) {
+        flags.push({ userId, name: d.name, month, flagType: 'full_day', amount: netLate, deductDays: 1, canDeduct })
+      } else if (netLate >= 240) {
+        flags.push({ userId, name: d.name, month, flagType: 'half_day', amount: netLate, deductDays: 0.5, canDeduct })
+      }
     }
     return flags
   }
@@ -574,7 +699,7 @@ export default function AdminPage() {
         user_id: flag.userId, type: 'earned',
         date_from: flag.month + '-01', date_to: flag.month + '-01',
         value: flag.deductDays,
-        reason: `Attendance deduction — ${flag.flagType === 'half_day' ? 'half day' : 'full day'} (${flag.month})`,
+        reason: `Attendance deduction — ${flag.flagType === 'half_day' ? 'half day' : flag.flagType === 'full_day' ? 'full day' : `${flag.deductDays} days`} (${flag.month})`,
         status: 'approved',
       })
     }
@@ -622,7 +747,7 @@ export default function AdminPage() {
       baDt.setMonth(baDt.getMonth() + 6 + (bi - 1) * 12)
       const baYear = baDt.getFullYear()
       if (baYear === TARGET) {
-        toInsert.push({ date: fmtDt(baDt), type: 'bi-annual', notes: `${ordSuffix(bi)} Bi-Annual Review` })
+        toInsert.push({ date: fmtDt(baDt), type: 'bi-annual', notes: 'Bi-Annual Review' })
       }
       if (baYear > TARGET) break
     }
@@ -867,10 +992,11 @@ export default function AdminPage() {
         {(() => {
           const flags = computeFlags()
           if (flags.length === 0) return null
-          const flagLabel = (t: string) =>
-            t === 'full_day' ? 'Full Day Deduction' : 'Half Day Deduction'
-          const flagCls = (t: string) =>
-            t === 'full_day' ? 'text-red-600 bg-red-50 border-red-200' : 'text-amber-600 bg-amber-50 border-amber-200'
+          const deductionLabel = (f: { flagType: string; deductDays: number }) => {
+            if (f.flagType === 'half_day') return 'Half Day'
+            if (f.flagType === 'full_day') return 'Full Day'
+            return `${f.deductDays} Days`
+          }
           return (
             <section>
               <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">
@@ -880,7 +1006,7 @@ export default function AdminPage() {
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-[#eee] bg-[#fafafa]">
-                      {['Name', 'Type', 'Amount', 'Month', ''].map(h => (
+                      {['Name', 'Net Late', 'Deduction Type', 'Month', ''].map(h => (
                         <th key={h} className="px-5 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal">{h}</th>
                       ))}
                     </tr>
@@ -889,17 +1015,29 @@ export default function AdminPage() {
                     {flags.map((f, i) => (
                       <tr key={i} className="hover:bg-[#fafafa]">
                         <td className="px-5 py-3 text-xs text-[#1a1a1a]">{f.name}</td>
+                        <td className="px-5 py-3 text-xs text-[#888]">{Math.round(f.amount)} mins</td>
                         <td className="px-5 py-3">
-                          <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${flagCls(f.flagType)}`}>{flagLabel(f.flagType)}</span>
+                          <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 border ${
+                            f.canDeduct
+                              ? 'text-red-600 bg-red-50 border-red-200'
+                              : 'text-amber-600 bg-amber-50 border-amber-200'
+                          }`}>
+                            {deductionLabel(f)}
+                          </span>
                         </td>
-                        <td className="px-5 py-3 text-xs text-[#888]">{Math.round(f.amount)} mins net late</td>
                         <td className="px-5 py-3 text-xs text-[#888]">{f.month}</td>
                         <td className="px-5 py-3">
-                          <button
-                            onClick={() => setFlagModal({ userId: f.userId, name: f.name, month: f.month, flagType: f.flagType, amount: f.amount, deductDays: f.deductDays })}
-                            className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
-                            {f.deductDays > 0 ? 'Deduct Leave' : 'Clear Flag'}
-                          </button>
+                          {f.canDeduct ? (
+                            <button
+                              onClick={() => setFlagModal({ userId: f.userId, name: f.name, month: f.month, flagType: f.flagType, amount: f.amount, deductDays: f.deductDays })}
+                              className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">
+                              {f.deductDays > 0 ? 'Deduct Leave' : 'Clear Flag'}
+                            </button>
+                          ) : (
+                            <span title="Available from 25th" className="text-xs text-[#ccc] cursor-not-allowed select-none">
+                              Deduct Leave
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1543,6 +1681,192 @@ export default function AdminPage() {
               </tbody>
             </table>
           </div>
+        </section>
+
+        {/* Records */}
+        <section>
+          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-6">Records</h3>
+
+          <div className="flex gap-0 border border-[#ddd] mb-6 w-fit">
+            {(['clock', 'leave'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setRecordsTab(tab)}
+                className={`px-6 py-2 text-[10px] tracking-[0.2em] uppercase transition-colors cursor-pointer ${
+                  recordsTab === tab ? 'bg-[#1a1a1a] text-white' : 'bg-white text-[#888] hover:text-[#1a1a1a]'
+                }`}
+              >
+                {tab === 'clock' ? 'Clock-In Logs' : 'Leave Logs'}
+              </button>
+            ))}
+          </div>
+
+          {recordsTab === 'clock' && (
+            <div className="border border-[#ddd] bg-white overflow-x-auto">
+              {clockLogs.length === 0 ? (
+                <p className="p-6 text-sm text-[#bbb] tracking-wider">No clock-in records found.</p>
+              ) : (
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#eee]">
+                      {['Date', 'Employee', 'Clock In', 'Status', 'Edit', 'Delete'].map(h => (
+                        <th key={h} className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f5f5f5]">
+                    {clockLogs.map(log => {
+                      const isLate = !!(log.clock_in_time && log.clock_in_time > '10:15')
+                      return editingClockId === log.id ? (
+                        <tr key={log.id} className="bg-[#fafafa]">
+                          <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(log.date)}</td>
+                          <td className="px-4 py-3 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>
+                          <td className="px-4 py-3" colSpan={2}>
+                            <input
+                              type="time"
+                              value={clockEditTime}
+                              onChange={e => setClockEditTime(e.target.value)}
+                              className="border border-[#ddd] bg-white px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-3">
+                              <button onClick={() => saveClockEdit(log)} disabled={clockEditSaving || !clockEditTime}
+                                className="text-xs text-[#1a1a1a] hover:text-emerald-600 cursor-pointer disabled:opacity-40">
+                                {clockEditSaving ? '…' : 'Save'}
+                              </button>
+                              <button onClick={() => setEditingClockId(null)}
+                                className="text-xs text-[#aaa] hover:text-[#1a1a1a] cursor-pointer">Cancel</button>
+                            </div>
+                          </td>
+                          <td />
+                        </tr>
+                      ) : (
+                        <tr key={log.id} className="hover:bg-[#fafafa]">
+                          <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(log.date)}</td>
+                          <td className="px-4 py-3 text-xs text-[#1a1a1a]">{(log.users as any)?.name || '—'}</td>
+                          <td className={`px-4 py-3 text-xs ${isLate ? 'text-amber-600' : 'text-[#888]'}`}>{fmtTime(log.clock_in_time)}</td>
+                          <td className="px-4 py-3">
+                            {log.clock_in_time ? (
+                              <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 ${isLate ? 'text-amber-600 bg-amber-50' : 'text-emerald-600 bg-emerald-50'}`}>
+                                {isLate ? 'Late' : 'On Time'}
+                              </span>
+                            ) : <span className="text-[#bbb]">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            <button onClick={() => { setEditingClockId(log.id); setClockEditTime(log.clock_in_time?.slice(0, 5) ?? '') }}
+                              className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">Edit</button>
+                          </td>
+                          <td className="px-4 py-3">
+                            {confirmDeleteClockId === log.id ? (
+                              <div className="flex items-center gap-2">
+                                <button onClick={() => deleteClockLogRecord(log.id)} disabled={deletingClockId === log.id}
+                                  className="text-xs text-red-500 hover:text-red-700 cursor-pointer disabled:opacity-40">
+                                  {deletingClockId === log.id ? '…' : 'Confirm'}
+                                </button>
+                                <button onClick={() => setConfirmDeleteClockId(null)}
+                                  className="text-xs text-[#aaa] cursor-pointer">✕</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => setConfirmDeleteClockId(log.id)}
+                                className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer">Delete</button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
+          {recordsTab === 'leave' && (
+            <div className="border border-[#ddd] bg-white overflow-x-auto">
+              {allLeaves.length === 0 ? (
+                <p className="p-6 text-sm text-[#bbb] tracking-wider">No leave records found.</p>
+              ) : (
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#eee]">
+                      {['Employee', 'Type', 'From', 'To', 'Days', 'Status', 'Edit', 'Delete'].map(h => (
+                        <th key={h} className="px-4 py-3 text-left text-[9px] tracking-[0.2em] uppercase text-[#aaa] font-normal whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f5f5f5]">
+                    {allLeaves.map(leave => (
+                      editingLeaveStatusId === leave.id ? (
+                        <tr key={leave.id} className="bg-[#fafafa]">
+                          <td className="px-4 py-3 text-xs text-[#1a1a1a]">{leave.users?.name || leave.users?.email || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-[#888] capitalize">{leave.type}</td>
+                          <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(leave.date_from)}</td>
+                          <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(leave.date_to)}</td>
+                          <td className="px-4 py-3 text-xs text-[#888]">{leave.value}</td>
+                          <td className="px-4 py-3">
+                            <select
+                              value={leaveEditStatus}
+                              onChange={e => setLeaveEditStatus(e.target.value)}
+                              className="border border-[#ddd] bg-white px-2 py-1 text-xs text-[#1a1a1a] focus:outline-none"
+                            >
+                              {['pending', 'approved', 'rejected', 'cancelled'].map(s => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-3">
+                              <button onClick={() => saveLeaveStatus(leave)} disabled={leaveEditSaving}
+                                className="text-xs text-[#1a1a1a] hover:text-emerald-600 cursor-pointer disabled:opacity-40">
+                                {leaveEditSaving ? '…' : 'Save'}
+                              </button>
+                              <button onClick={() => setEditingLeaveStatusId(null)}
+                                className="text-xs text-[#aaa] cursor-pointer">Cancel</button>
+                            </div>
+                          </td>
+                          <td />
+                        </tr>
+                      ) : (
+                        <tr key={leave.id} className="hover:bg-[#fafafa]">
+                          <td className="px-4 py-3 text-xs text-[#1a1a1a]">{leave.users?.name || leave.users?.email || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-[#888] capitalize">{leave.type}</td>
+                          <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(leave.date_from)}</td>
+                          <td className="px-4 py-3 text-xs text-[#888] whitespace-nowrap">{formatDate(leave.date_to)}</td>
+                          <td className="px-4 py-3 text-xs text-[#888]">{leave.value}</td>
+                          <td className="px-4 py-3">
+                            <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 ${STATUS_STYLES[leave.status] ?? 'text-[#888]'}`}>
+                              {leave.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <button onClick={() => { setEditingLeaveStatusId(leave.id); setLeaveEditStatus(leave.status) }}
+                              className="text-xs text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">Edit</button>
+                          </td>
+                          <td className="px-4 py-3">
+                            {confirmDeleteLeaveLogId === leave.id ? (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => deleteLeaveLog(leave.id, leave.status, leave.user_id, leave.type, leave.value)}
+                                  disabled={deletingLeaveLogId === leave.id}
+                                  className="text-xs text-red-500 hover:text-red-700 cursor-pointer disabled:opacity-40">
+                                  {deletingLeaveLogId === leave.id ? '…' : 'Confirm'}
+                                </button>
+                                <button onClick={() => setConfirmDeleteLeaveLogId(null)}
+                                  className="text-xs text-[#aaa] cursor-pointer">✕</button>
+                              </div>
+                            ) : (
+                              <button onClick={() => setConfirmDeleteLeaveLogId(leave.id)}
+                                className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer">Delete</button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Review Manager */}
