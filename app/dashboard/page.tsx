@@ -319,6 +319,8 @@ export default function Dashboard() {
 
   if (!user) return null
 
+  const nextReview = reviews2026.find(r => r.date >= getISTNow().date)
+
   return (
     <main className="min-h-screen bg-[#F5F2EE]">
       <Nav isAdmin={isAdmin} />
@@ -326,43 +328,114 @@ export default function Dashboard() {
       <div className="px-12 py-12 max-w-5xl mx-auto">
 
         {/* Header */}
-        <div className="flex items-end justify-between mb-12">
-          <div>
-            <p className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Welcome back</p>
-            <p className="text-2xl font-light tracking-wide text-[#1a1a1a]">
-              {user.user_metadata?.full_name || user.email}
-            </p>
-          </div>
-          <button
-            onClick={() => router.push('/apply')}
-            className="px-8 py-3 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all duration-300 cursor-pointer"
-          >
-            Apply for Leave
-          </button>
+        <div className="mb-10">
+          <p className="text-xs tracking-[0.3em] uppercase text-[#888] mb-2">Dashboard</p>
+          <p className="text-2xl font-light tracking-wide text-[#1a1a1a]">
+            {user.user_metadata?.full_name || user.email}
+          </p>
         </div>
 
-        {/* 2026 Reviews */}
-        {reviews2026.length > 0 && (
-          <div className="mb-8 border border-[#ddd] bg-white px-8 py-5">
-            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Your 2026 Reviews</p>
-            <div className="space-y-3">
-              {reviews2026.map((r, i) => (
-                <div key={i} className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-light text-[#1a1a1a]">{r.notes || (r.type === 'bi-annual' ? 'Mid-Year Review' : 'Annual Review')}</p>
-                    <p className="text-[10px] text-[#aaa] mt-0.5">{fmt(r.date)}</p>
-                  </div>
-                  <span className="text-[9px] tracking-[0.2em] uppercase text-[#888] border border-[#ddd] px-3 py-1 shrink-0 ml-4">
-                    {daysUntil(r.date)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* TOP ROW: Leave Balance | Upcoming Leaves */}
+        <div className="grid grid-cols-2 gap-6 mb-6">
 
-        {/* Clock In */}
-        <div className="mb-12">
+          {/* Left: Leave Balance table */}
+          <div className="border border-[#ddd] bg-white p-6">
+            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Leave Balance</p>
+            {balances.length === 0 ? (
+              <p className="text-xs text-[#bbb] tracking-wider">No balance data.</p>
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-[#eee]">
+                    {['Type', 'Allocated', 'Taken', 'Remaining'].map(h => (
+                      <th key={h} className="pb-2 text-left text-[9px] tracking-[0.2em] uppercase text-[#ccc] font-normal pr-4">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f5f5f5]">
+                  {balances.map(b => (
+                    <tr key={b.key}>
+                      <td className="py-2.5 text-xs text-[#1a1a1a] pr-4">{b.label}</td>
+                      <td className="py-2.5 text-xs text-[#888] pr-4">{b.allocated}</td>
+                      <td className="py-2.5 text-xs text-[#888] pr-4">{b.taken}</td>
+                      <td className={`py-2.5 text-xs font-medium ${b.balance < 0 ? 'text-red-500' : 'text-[#1a1a1a]'}`}>{b.balance}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Right: Upcoming Leaves (next 3) */}
+          <div className="border border-[#ddd] bg-white p-6">
+            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Upcoming Leaves</p>
+            {myLeaves.length === 0 ? (
+              <p className="text-xs text-[#bbb] tracking-wider">No upcoming leaves.</p>
+            ) : (
+              <div className="space-y-0 divide-y divide-[#f5f5f5]">
+                {myLeaves.slice(0, 3).map(leave => (
+                  <div key={leave.id} className="py-3 first:pt-0">
+                    {editingId === leave.id ? (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">From</label>
+                            <input type="date" value={editState.date_from}
+                              onChange={e => setEditState({ ...editState, date_from: e.target.value })}
+                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
+                          </div>
+                          <div>
+                            <label className="text-[9px] uppercase tracking-wider text-[#aaa] block mb-1">To</label>
+                            <input type="date" value={editState.date_to}
+                              onChange={e => setEditState({ ...editState, date_to: e.target.value })}
+                              className="w-full border border-[#ddd] bg-[#F5F2EE] px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
+                          </div>
+                        </div>
+                        <input type="text" value={editState.reason}
+                          onChange={e => setEditState({ ...editState, reason: e.target.value })}
+                          placeholder="Reason"
+                          className="w-full border border-[#ddd] bg-[#F5F2EE] px-2 py-1.5 text-xs text-[#1a1a1a] focus:outline-none" />
+                        <div className="flex gap-2">
+                          <button onClick={() => saveEdit(leave.id)} disabled={saving}
+                            className="px-3 py-1.5 border border-[#1a1a1a] text-[9px] uppercase tracking-wider text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">Save</button>
+                          <button onClick={() => setEditingId(null)}
+                            className="px-3 py-1.5 border border-[#ddd] text-[9px] uppercase text-[#888] cursor-pointer">Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-xs text-[#1a1a1a] capitalize">{leave.type} leave</p>
+                          <p className="text-[10px] text-[#aaa] mt-0.5">
+                            {fmt(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmt(leave.date_to)}` : ''}
+                            {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value}d`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {leave.status === 'pending' && (
+                            <button onClick={() => startEdit(leave)}
+                              className="text-[10px] text-[#aaa] hover:text-[#1a1a1a] transition-colors cursor-pointer">Edit</button>
+                          )}
+                          <button onClick={() => cancelLeave(leave.id)} disabled={saving}
+                            className="text-[10px] text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">Cancel</button>
+                          <span className={`text-[9px] uppercase tracking-wider px-2 py-0.5 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
+                            {leave.status}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {myLeaves.length > 3 && (
+                  <p className="text-[10px] text-[#aaa] tracking-wider pt-3">+{myLeaves.length - 3} more</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* MIDDLE ROW: Today's Attendance */}
+        <div className="mb-6">
           <div className="border border-[#ddd] bg-white px-8 py-5 flex items-center justify-between">
             <div>
               <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-2">Today's Attendance</p>
@@ -372,12 +445,16 @@ export default function Dashboard() {
                     <span className="text-[9px] text-[#ccc] uppercase tracking-wider">Clock In</span>
                     <p className="text-sm font-light text-[#1a1a1a] mt-0.5">{fmtTime(todayClock.clock_in_time)}</p>
                   </div>
-                  {todayClock.clock_in_time > '10:15' && (
+                  {todayClock.clock_in_time > '10:15' ? (
                     <div>
                       <span className="text-[9px] text-amber-600 uppercase tracking-wider">Late</span>
                       <p className="text-sm font-light text-amber-600 mt-0.5">
                         +{minutesDiff('10:00', todayClock.clock_in_time)}m
                       </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <span className="text-[9px] text-emerald-600 uppercase tracking-wider">On Time</span>
                     </div>
                   )}
                 </div>
@@ -427,9 +504,7 @@ export default function Dashboard() {
                         </td>
                         {isAdmin && (
                           <td className="px-6 py-3">
-                            <button
-                              onClick={() => deleteAnyClockIn(log.id)}
-                              disabled={clockAction}
+                            <button onClick={() => deleteAnyClockIn(log.id)} disabled={clockAction}
                               className="text-xs text-[#aaa] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-30">
                               Delete
                             </button>
@@ -444,113 +519,47 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Balance Cards — dynamic, one per leave type with a balance */}
-        {balances.length > 0 && (
-          <div className="grid grid-cols-3 gap-6 mb-14">
-            {balances.map(b => (
-              <div key={b.key} className="border border-[#ddd] p-6 bg-white">
-                <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-3">{b.label}</p>
-                <p className={`text-4xl font-light ${b.balance < 0 ? 'text-red-500' : 'text-[#1a1a1a]'}`}>
-                  {b.balance}
-                </p>
-                <p className={`text-[10px] tracking-wider mt-1 mb-4 ${b.balance < 0 ? 'text-red-400' : 'text-[#bbb]'}`}>
-                  {b.balance < 0 ? 'over quota (unpaid)' : 'remaining'}
-                </p>
-                <div className="border-t border-[#f0f0f0] pt-3 flex gap-6">
-                  <div>
-                    <p className="text-[9px] text-[#ccc] uppercase tracking-wider">Allocated</p>
-                    <p className="text-xs text-[#888] mt-0.5 font-light">{b.allocated}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] text-[#ccc] uppercase tracking-wider">Taken</p>
-                    <p className="text-xs text-[#888] mt-0.5 font-light">{b.taken}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] text-[#ccc] uppercase tracking-wider">Scheduled</p>
-                    <p className="text-xs text-[#888] mt-0.5 font-light">{b.scheduled}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* BOTTOM ROW: Quick Actions | Next Review */}
+        <div className="grid grid-cols-2 gap-6 mb-14">
 
-        {/* Upcoming Leaves */}
-        <div className="mb-14">
-          <h3 className="text-xs tracking-[0.3em] uppercase text-[#888] mb-5">Upcoming Leaves</h3>
-          {myLeaves.length === 0 ? (
-            <p className="text-sm text-[#bbb] tracking-wider">No upcoming or pending leaves.</p>
-          ) : (
-            <div className="border border-[#ddd] bg-white divide-y divide-[#eee]">
-              {myLeaves.map(leave => (
-                <div key={leave.id}>
-                  {editingId === leave.id ? (
-                    <div className="px-8 py-6 space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Type</label>
-                          <select value={editState.type} onChange={e => setEditState({ ...editState, type: e.target.value })}
-                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
-                            {balances.map(b => <option key={b.key} value={b.key}>{b.label}</option>)}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Duration</label>
-                          <select value={editState.value} onChange={e => setEditState({ ...editState, value: e.target.value })}
-                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs uppercase text-[#1a1a1a] focus:outline-none">
-                            <option value="1">Full Day</option>
-                            <option value="0.5">Half Day</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">From</label>
-                          <input type="date" value={editState.date_from} onChange={e => setEditState({ ...editState, date_from: e.target.value })}
-                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                        </div>
-                        <div>
-                          <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">To</label>
-                          <input type="date" value={editState.date_to} onChange={e => setEditState({ ...editState, date_to: e.target.value })}
-                            className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="text-xs tracking-[0.2em] uppercase text-[#888] block mb-1">Reason</label>
-                        <input type="text" value={editState.reason} onChange={e => setEditState({ ...editState, reason: e.target.value })}
-                          className="w-full border border-[#ddd] bg-[#F5F2EE] px-3 py-2 text-xs text-[#1a1a1a] focus:outline-none" />
-                      </div>
-                      <div className="flex gap-3">
-                        <button onClick={() => saveEdit(leave.id)} disabled={saving}
-                          className="px-6 py-2 border border-[#1a1a1a] text-xs tracking-wider uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all cursor-pointer disabled:opacity-40">Save</button>
-                        <button onClick={() => setEditingId(null)}
-                          className="px-6 py-2 border border-[#ddd] text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] cursor-pointer">Cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="px-8 py-5 flex items-center justify-between">
-                      <div>
-                        <p className="text-xs tracking-[0.2em] uppercase text-[#1a1a1a]">{leave.type} leave</p>
-                        <p className="text-xs text-[#888] mt-1">
-                          {fmt(leave.date_from)}{leave.date_to !== leave.date_from ? ` → ${fmt(leave.date_to)}` : ''}
-                          {' · '}{leave.value === 0.5 ? 'Half day' : `${leave.value} day${leave.value !== 1 ? 's' : ''}`}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        {leave.status === 'pending' && (
-                          <button onClick={() => startEdit(leave)}
-                            className="text-xs tracking-wider uppercase text-[#888] hover:text-[#1a1a1a] transition-colors cursor-pointer">Modify</button>
-                        )}
-                        <button onClick={() => cancelLeave(leave.id)} disabled={saving}
-                          className="text-xs tracking-wider uppercase text-[#888] hover:text-red-500 transition-colors cursor-pointer disabled:opacity-40">Cancel</button>
-                        <span className={`text-xs tracking-widest uppercase px-3 py-1 ${STATUS_STYLES[leave.status] ?? 'text-[#888] bg-[#f5f5f5]'}`}>
-                          {leave.status}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
+          {/* Left: Quick Actions */}
+          <div className="border border-[#ddd] bg-white p-6">
+            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Quick Actions</p>
+            <div className="space-y-3">
+              <button
+                onClick={() => router.push('/apply')}
+                className="w-full py-3 border border-[#1a1a1a] text-xs tracking-[0.25em] uppercase text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-[#F5F2EE] transition-all duration-300 cursor-pointer"
+              >
+                Apply for Leave
+              </button>
+              <button
+                onClick={() => router.push('/attendance')}
+                className="w-full py-3 border border-[#ddd] text-xs tracking-[0.25em] uppercase text-[#888] hover:border-[#1a1a1a] hover:text-[#1a1a1a] transition-all duration-300 cursor-pointer"
+              >
+                Log Overtime
+              </button>
             </div>
-          )}
+          </div>
+
+          {/* Right: Next Review Date */}
+          <div className="border border-[#ddd] bg-white p-6">
+            <p className="text-[9px] tracking-[0.3em] uppercase text-[#aaa] mb-4">Next Review</p>
+            {!nextReview ? (
+              <p className="text-xs text-[#bbb] tracking-wider">No upcoming reviews scheduled.</p>
+            ) : (
+              <div>
+                <p className="text-xs font-light text-[#1a1a1a]">
+                  {nextReview.notes || (nextReview.type === 'bi-annual' ? 'Bi-Annual Review' : 'Annual Review')}
+                </p>
+                <p className="text-[10px] text-[#aaa] mt-1">
+                  {new Date(nextReview.date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}
+                </p>
+                <span className="text-[9px] tracking-[0.2em] uppercase text-[#888] border border-[#ddd] px-3 py-1 mt-3 inline-block">
+                  {daysUntil(nextReview.date)}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Team Availability */}

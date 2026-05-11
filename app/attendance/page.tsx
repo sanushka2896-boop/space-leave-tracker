@@ -116,6 +116,7 @@ export default function AttendancePage() {
   const [tab, setTab] = useState<'clock' | 'late' | 'overtime'>('clock')
   const [isAdmin, setIsAdmin] = useState(false)
   const [userId, setUserId] = useState('')
+  const [myName, setMyName] = useState('')
   const [team, setTeam] = useState<TeamMember[]>([])
   const [loading, setLoading] = useState(true)
   const router = useRouter()
@@ -199,7 +200,7 @@ export default function AttendancePage() {
       setOtNotesEdit(map)
     } else {
       const { data } = await supabaseAdmin.from('overtime_entries')
-        .select('*').eq('user_id', uid).order('date', { ascending: false })
+        .select('*, users(name)').eq('user_id', uid).order('date', { ascending: false })
       const entries = (data ?? []) as OvertimeEntry[]
       setOvertimeEntries(entries)
       const map: Record<string, string> = {}
@@ -263,6 +264,7 @@ export default function AttendancePage() {
       const adminFlag = dbUser.is_admin === true
       setIsAdmin(adminFlag)
       setUserId(dbUser.id)
+      setMyName(dbUser.name || session.user.email?.split('@')[0] || '')
       if (adminFlag) {
         const { data: usersData } = await supabaseAdmin.from('users').select('id, name, email').order('name')
         setTeam(usersData ?? [])
@@ -398,13 +400,15 @@ export default function AttendancePage() {
   function computeBalance() {
     const lateMap: Record<string, { name: string; count: number; totalMins: number }> = {}
     for (const row of lateArrivals) {
-      if (!lateMap[row.user_id]) lateMap[row.user_id] = { name: (row.users as any)?.name || '—', count: 0, totalMins: 0 }
+      const name = (row.users as any)?.name || (row.user_id === userId ? myName : '') || '—'
+      if (!lateMap[row.user_id]) lateMap[row.user_id] = { name, count: 0, totalMins: 0 }
       lateMap[row.user_id].count++
       lateMap[row.user_id].totalMins += row.minutes_late ?? 0
     }
     const otMap: Record<string, { name: string; count: number; totalMins: number }> = {}
     for (const e of overtimeEntries) {
-      if (!otMap[e.user_id]) otMap[e.user_id] = { name: (e.users as any)?.name || '—', count: 0, totalMins: 0 }
+      const name = (e.users as any)?.name || (e.user_id === userId ? myName : '') || '—'
+      if (!otMap[e.user_id]) otMap[e.user_id] = { name, count: 0, totalMins: 0 }
       otMap[e.user_id].count++
       otMap[e.user_id].totalMins += parseOTDuration(e.overtime_duration)
     }

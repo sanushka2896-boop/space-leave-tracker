@@ -312,26 +312,33 @@ export default function ApplyLeave() {
               </>
             )}
 
-            {/* Deduction preview */}
-            {effectiveValue > 0 && (
-              <div className="border border-[#eee] bg-[#fafaf9] px-5 py-4">
-                <p className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] mb-1">Leave Deduction</p>
-                <p className="text-sm font-light text-[#1a1a1a]">
-                  {effectiveValue === 0.5
-                    ? 'Half day — 0.5 days'
-                    : `${effectiveValue} working day${effectiveValue !== 1 ? 's' : ''}`}
-                </p>
-                {currentBalance !== null && (
-                  <p className={`text-[10px] mt-1 ${(currentBalance - effectiveValue) < 0 ? 'text-red-400' : 'text-[#bbb]'}`}>
-                    Balance after: {(currentBalance - effectiveValue)} days
-                    {(currentBalance - effectiveValue) < 0 ? ' (unpaid)' : ''}
+            {/* Deduction preview — always visible */}
+            <div className="border border-[#eee] bg-[#fafaf9] px-5 py-4">
+              <p className="text-[10px] tracking-[0.2em] uppercase text-[#aaa] mb-1">Leave Deduction</p>
+              {!form.date_from ? (
+                <p className="text-sm font-light text-[#bbb]">Select dates to calculate duration</p>
+              ) : (
+                <>
+                  <p className="text-sm font-light text-[#1a1a1a]">
+                    {effectiveValue === 0.5
+                      ? 'Half day — 0.5 days'
+                      : `${effectiveValue} working day${effectiveValue !== 1 ? 's' : ''}`}
                   </p>
-                )}
-                {isMultiDay && (
-                  <p className="text-[10px] text-[#bbb] mt-1">Sundays excluded from count</p>
-                )}
-              </div>
-            )}
+                  {currentBalance !== null && (
+                    <p className={`text-[10px] mt-1 ${(currentBalance - effectiveValue) < 0 ? 'text-red-400' : 'text-[#bbb]'}`}>
+                      Balance after: {(currentBalance - effectiveValue)} days
+                      {(currentBalance - effectiveValue) < 0 ? ' (unpaid)' : ''}
+                    </p>
+                  )}
+                  {isMultiDay && (
+                    <p className="text-[10px] text-[#bbb] mt-1">Sundays excluded from count</p>
+                  )}
+                </>
+              )}
+              {form.type === 'wfh' && (
+                <p className="text-[10px] text-[#aaa] mt-2">(counts as 1 day or 0.5 for half day)</p>
+              )}
+            </div>
 
             {/* Reason */}
             <div>
