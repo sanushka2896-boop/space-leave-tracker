@@ -93,7 +93,7 @@ export default function ApplyLeave() {
   const effectiveValue: number = isSabbatical
     ? sabbaticalDays
     : isMultiDay
-    ? calcWorkingDays(form.date_from, form.date_to)
+    ? calcWorkingDays(form.date_from, form.date_to) * (form.halfDay ? 0.5 : 1)
     : form.halfDay ? 0.5 : 1
 
   const isSabbaticalEligible = (() => {
@@ -117,9 +117,6 @@ export default function ApplyLeave() {
       end.setDate(end.getDate() + autoDays - 1)
       updated.date_to = end.toISOString().split('T')[0]
     }
-    const from = updated.date_from
-    const to = updated.date_to
-    if (from && to && from !== to) updated.halfDay = false
     setForm(updated)
   }
 
@@ -270,6 +267,27 @@ export default function ApplyLeave() {
               </div>
             ) : (
               <>
+                {/* Duration toggle — always visible */}
+                <div>
+                  <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Duration</label>
+                  <div className="flex">
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, halfDay: false })}
+                      className={`flex-1 py-3 text-xs tracking-[0.2em] uppercase border transition-all duration-200 cursor-pointer ${!form.halfDay ? 'bg-[#1a1a1a] text-[#F5F2EE] border-[#1a1a1a]' : 'bg-white text-[#888] border-[#ddd] hover:border-[#1a1a1a] hover:text-[#1a1a1a]'}`}
+                    >
+                      Full Day
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, halfDay: true })}
+                      className={`flex-1 py-3 text-xs tracking-[0.2em] uppercase border-t border-b border-r transition-all duration-200 cursor-pointer ${form.halfDay ? 'bg-[#1a1a1a] text-[#F5F2EE] border-[#1a1a1a]' : 'bg-white text-[#888] border-[#ddd] hover:border-[#1a1a1a] hover:text-[#1a1a1a]'}`}
+                    >
+                      Half Day
+                    </button>
+                  </div>
+                </div>
+
                 {/* Date Range */}
                 <div className="grid grid-cols-2 gap-6">
                   <div>
@@ -294,19 +312,6 @@ export default function ApplyLeave() {
                     <p className="text-[10px] tracking-[0.15em] uppercase text-amber-700">
                       End date auto-set to {matAutoDays} calendar days — you may reduce it but not extend
                     </p>
-                  </div>
-                )}
-
-                {/* Half-day: single-day only */}
-                {!isMultiDay && form.date_from && (
-                  <div>
-                    <label className="text-xs tracking-[0.25em] uppercase text-[#888] block mb-3">Duration</label>
-                    <select value={form.halfDay ? '0.5' : '1'}
-                      onChange={e => setForm({ ...form, halfDay: e.target.value === '0.5' })}
-                      className="w-full border border-[#ddd] bg-[#F5F2EE] px-4 py-3 text-xs tracking-wider uppercase text-[#1a1a1a] focus:outline-none">
-                      <option value="1">Full Day</option>
-                      <option value="0.5">Half Day</option>
-                    </select>
                   </div>
                 )}
               </>
