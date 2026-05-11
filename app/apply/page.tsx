@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { supabase, supabaseAdmin } from '../lib/supabase'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
@@ -29,7 +29,7 @@ function calcWorkingDays(from: string, to: string): number {
   return count
 }
 
-export default function ApplyLeave() {
+function ApplyContent() {
   const [user, setUser] = useState<User | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
@@ -370,5 +370,13 @@ export default function ApplyLeave() {
         )}
       </div>
     </main>
+  )
+}
+
+export default function ApplyPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#F5F2EE]" />}>
+      <ApplyContent />
+    </Suspense>
   )
 }
